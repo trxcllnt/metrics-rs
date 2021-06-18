@@ -490,6 +490,60 @@ pub use metrics_macros::register_histogram;
 /// ```
 pub use metrics_macros::increment_counter;
 
+/// Increments a counter based on an absolute value.
+///
+/// Counters represent a single monotonic value, which means the value can only be incremented, not
+/// decremented, and always starts out with an initial value of zero.
+///
+/// Metric names are shown below using string literals, but they can also be owned `String` values,
+/// which includes using macros such as `format!` directly at the callsite. String literals are
+/// preferred for performance where possible.
+///
+/// While `counter!` and `increment_counter!` require users to pass a delta that a counter will be
+/// incremented by, `absolute_counter!` allows passing an absolute value that is internally tracked
+/// over time in order to properly track the incremental changes to the overall value itself.  This
+/// can be useful when a user wishes to expose metrics from an internal library or system that only
+/// expose a point-in-time counter reading, without the user having to track the deltas themselves.
+///
+/// # Caveats
+/// This macro has a few specific caveats that must be followed in order for correct behavior:
+/// - you cannot mix `absolute_counter!` with either `counter!` or `increment_counter!`
+/// - you cannot have multiple calls to `absolute_counter!` for the same metric name
+///
+/// As `absolute_counter!` works by tracking state locally, it is unaware of changes made by
+/// `counter!`, `increment_counter!`, or other instances of `absolute_counter!` using the same
+/// metric name.  Users risk undefined behavior with regards to the value of a counter when these
+/// constraints are violated.
+///
+/// # Example
+/// ```
+/// # use metrics::absolute_counter;
+/// # fn main() {
+/// // A basic counter:
+/// absolute_counter!("some_metric_name", 12);
+///
+/// // Calling `absolute_counter!` again with the new absolute value, but this would only increment
+/// // the counter by 5:
+/// absolute_counter!("some_metric_name", 17);
+///
+/// // Specifying labels:
+/// absolute_counter!("some_metric_name", 12, "service" => "http");
+///
+/// // We can also pass labels by giving a vector or slice of key/value pairs:
+/// let dynamic_val = "woo";
+/// let labels = [("dynamic_key", format!("{}!", dynamic_val))];
+/// absolute_counter!("some_metric_name", 12, &labels);
+///
+/// // As mentioned in the documentation, metric names also can be owned strings, including ones
+/// // generated at the callsite via things like `format!`:
+/// let name = String::from("some_owned_metric_name");
+/// absolute_counter!(name, 12);
+///
+/// absolute_counter!(format!("{}_via_format", "name"), 12);
+/// # }
+/// ```
+pub use metrics_macros::absolute_counter;
+
 /// Increments a counter.
 ///
 /// Counters represent a single monotonic value, which means the value can only be incremented, not

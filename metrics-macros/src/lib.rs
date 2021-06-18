@@ -199,6 +199,17 @@ pub fn counter(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
+pub fn absolute_counter(input: TokenStream) -> TokenStream {
+    let WithExpression {
+        key,
+        op_value,
+        labels,
+    } = parse_macro_input!(input as WithExpression);
+
+    absolute_counter_impl(key, labels, op_value).into()
+}
+
+#[proc_macro]
 pub fn increment_gauge(input: TokenStream) -> TokenStream {
     let WithExpression {
         key,
@@ -309,6 +320,57 @@ where
             if let Some(recorder) = metrics::try_recorder() {
                 #locals
                 recorder.#op_ident(#metric_key, #op_values);
+            }
+        }
+    }
+}
+
+fn absolute_counter_impl<V>(
+    name: Expr,
+    labels: Option<Labels>,
+    op_value: V,
+) -> TokenStream2
+where
+    V: ToTokens,
+{
+    let statics = generate_statics(&name, &labels);
+    let (locals, metric_key) = generate_metric_key(&name, &labels);
+    quote! {
+        {
+            #statics
+            // Only do this work if there's a recorder installed.
+            if let Some(recorder) = metrics::try_recorder() {
+                #locals
+
+                use ::std::sync::atomic::{AtomicU64, Ordering};
+
+                static PREVIOUS_VALUE: AtomicU64 = AtomicU64::new(0);
+
+                let new_value = #op_value;
+                let mut previous_value = PREVIOUS_VALUE.load(Ordering::Relaxed);
+
+                loop {
+                    // If the stored value is greater than or equal to the value we're trying to
+                    // set right now, then we need to bail out because we've "lost" the update race.
+                    if new_value <= previous_value {
+                        break;
+                    }
+
+                    match PREVIOUS_VALUE.compare_exchange_weak(
+                        previous_value,
+                        new_value,
+                        Ordering::SeqCst,
+                        Ordering::Relaxed,
+                    ) {
+                        // Lost the exchange, so try again.
+                        Err(value) => previous_value = value,
+                        // Won the exchange, so calculate the delta and increment the counter.
+                        Ok(_) => {
+                            let delta = new_value - previous_value;
+                            recorder.increment_counter(#metric_key, delta);
+                        }
+                    }
+                }
             }
         }
     }
