@@ -141,19 +141,6 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY:
-        //
-        // The core premise of our union layout is that both the non-inlined and inlined structs both have an
-        // `Option<NonNull<T>>` field as their first field, and we always use `None` for inlined variants, and
-        // `Some(...)` for non-inlined variants: there's always a pointer whether it's borrowed or owned.
-        // Additionally, we _only_ use the inlined variant when `T` is `str`.
-        //
-        // We specifically impl `Deref`/`Clone`/`Drop` for `Cow2<'_, T>` and then separately for `Cow2<'_, str>`. Since
-        // we know that we will never inline anything unless `T` is `str`, we know that if we're here, in this non-`str`
-        // implementation, that we're dealing with a non-inlined variant.
-        //
-        // In turn, accessing `self.non_inlined` is safe. QED.
-
         let borrowed_ptr = T::borrowed_from_parts(self.ptr, &self.inner);
         unsafe { borrowed_ptr.as_ref().unwrap() }
     }
