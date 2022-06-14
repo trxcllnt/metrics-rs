@@ -1,4 +1,8 @@
 use std::{
+    borrow::Borrow,
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
     marker::PhantomData,
     mem::ManuallyDrop,
     ops::Deref,
@@ -23,18 +27,18 @@ enum Kind {
 ///
 /// # Strings, strings everywhere
 ///
-/// In `metrics`, strings are arguably the most common data type used despite fundamentally dealing with numerical
-/// measurements. Both the name of a metric, and its labels, are compromised a strings: emitting a metric may involve
-/// one string, or 10 strings. Even further, many of these strings tend to be used over and over during the life of the
-/// process.
+/// In `metrics`, strings are arguably the most common data type used despite the fact that metrics are measuring
+/// numerical values. Both the name of a metric, and its labels, are strings: emitting a metric may involve
+/// one string, or 10 strings. Many of these strings tend to be used over and over during the life of the
+/// process, as well.
 ///
-/// In over to provide high performance, and to help avoid making constant, small allocations, using a "clone-on-write"
-/// smart pointer allows us to represent a logical data type -- such as a string -- in multiple forms, depending on
-/// which is available, and allows for seamless access to that data, whether its immutable access of creating an owned version.
+/// In order to achieve and maintain a high level of performance, we use a "clone-on-write" smart pointer to handle
+/// passing these strings around. Doing so allows us to potentially avoid having to allocate entire copies of a string,
+/// instead using a lightweight smart pointer that can live on the stack.
 ///
 /// # Why not `std::borrow::Cow`?
 ///
-/// Typically, those writing Rust may reach for `std::borrow::Cow`, which already works well in many cases. However,
+/// The standard library already provides a clone-on-write smart pointer, `std::borrow::Cow`, which works well in many cases. However,
 /// `metrics` strives to provide minimal overhead where possible, and so `std::borrow::Cow` falls down in one particular
 /// way: it uses an enum representation which consumes an additional word of storage.
 ///
@@ -42,9 +46,9 @@ enum Kind {
 /// version of `str` is simply `String`. Thus, for `std::borrow::Cow`, the in-memory layout looks like this:
 ///
 /// ```text
-///                                                            Padding
-///                                                               |
-///                                                               v
+///                                                                       Padding
+///                                                                          |
+///                                                                          v
 ///                       +--------------+-------------+--------------+--------------+
 /// stdlib Cow::Borrowed: |   Enum Tag   |   Pointer   |    Length    |   XXXXXXXX   |
 ///                       +--------------+-------------+--------------+--------------+
@@ -53,28 +57,37 @@ enum Kind {
 ///                       +--------------+-------------+--------------+--------------+
 /// ```
 ///
-/// Just as `beef` does, we encode the notion of borrowed vs owned into the the length and capacity fields directly,
-/// and use a struct, which avoids needing an implicit or explicit discriminant field:
+/// As you can see, you pay a memory size penalty when wrapping an owned string. This additional word adds minimal
+/// overhead, but we can easily avoid it with some clever logic around the values of the length and capacity fields.
+///
+/// There is an existing crate that does just that: `beef`. Instead of using an enum, it is simply a struct that encodes
+/// the discriminant values in the length and capacity fields directly. If we're wrapping a borrowed value, we can infer
+/// that the "capacity" will always be zero, as we only need to track the capacity when we're wrapping an owned value,
+/// in order to be able to recreate the underlying storage when consuming the smart pointer, or dropping it. Instead of
+/// the above layout, `beef` looks like this:
 ///
 /// ```text
-///                         +-------------+--------------+----------------+
-/// metrics Cow (borrowed): |   Pointer   |  Length (N)  |  Capacity (0)  |
-///                         +-------------+--------------+----------------+
-///                         +-------------+--------------+----------------+
-/// stdlib Cow (owned):     |   Pointer   |  Length (N)  |  Capacity (N)  |
-///                         +-------------+--------------+----------------+
+///                        +-------------+--------------+----------------+
+/// `beef` Cow (borrowed): |   Pointer   |  Length (N)  |  Capacity (0)  |
+///                        +-------------+--------------+----------------+
+///                        +-------------+--------------+----------------+
+/// `beef` Cow (owned):    |   Pointer   |  Length (N)  |  Capacity (N)  |
+///                        +-------------+--------------+----------------+
 /// ```
 ///
 /// # Why not `beef`?
 ///
-/// Up until this point, it might not be clear why we didn't just use `beef`. And indeed, we've already admitted that
-/// this design is fundamentally based on `beef`. Crucially, however, `beef` did not/still does not support `const`
-/// construction for generic slices. Remember how we mentioned labels? The labels of a metric `are `[Label]`
-/// under-the-hood, and so without a way to construct them in a `const` fashion, our previous work to allow entirely
-/// static keys would not be possible.
+/// Up until this point, it might not be clear why we didn't just use `beef`. In truth, our design is fundamentally
+/// based on `beef`. Crucially, however, `beef` did not/still does not support `const` construction for generic slices.
+/// Remember how we mentioned labels? The labels of a metric `are `[Label]` under-the-hood, and so without a way to
+/// construct them in a `const` fashion, our previous work to allow entirely static keys would not be possible.
 ///
 /// Thus, we forked `beef` and copied into directly into `metrics` so that we could write a specialized `const`
 /// constructor for `[Label]`.
+///
+/// This is why we have our own `Cow2` bundled into `metrics` directly, which is based on `beef`. In doing so, we can
+/// experiment with more interesting optimizations, and, as mentioned above, we can add const methods to support
+/// all of the types involved in statically building metrics keys.
 ///
 /// # What we do that `beef` doesn't do
 ///
@@ -84,10 +97,10 @@ enum Kind {
 /// ## `Arc`-wrapped values
 ///
 /// For many strings, there is still a desire to share them cheaply even when they are constructed at run-time.
-/// Remember, cloning a `Cow` of an owned value means cloning the value itself, so we need another level of indirection
+/// Remember, cloning a `Cow2` of an owned value means cloning the value itself, so we need another level of indirection
 /// to allow the cheap sharing, which is where `Arc<T>` comes in.
 ///
-/// Users can construct a `Arc<T>`, whether `T` is lines up with the `T` of `metrics::Cow2`, and use that as the initial
+/// Users can construct a `Arc<T>`, where `T` is lined up with the `T` of `metrics::Cow2`, and use that as the initial
 /// value instead. When `Cow2` is cloned, we instead cloning the underlying `Arc<T>`, avoiding a new allocation.
 /// `Arc<T>` still handles all of the normal logic necessary to know when the wrapped value must be dropped, and how
 /// many live references to the value that there are, and so on.
@@ -100,7 +113,7 @@ enum Kind {
 ///                     +---------------+----------------+
 /// Borrowed (&T):      |       N       |        0       |
 ///                     +---------------+----------------+
-/// Owned (T::ToOwned): |       N       | M < usize::MAX |
+/// Owned (T::ToOwned): |       N       | N < usize::MAX |
 ///                     +---------------+----------------+
 /// Shared (Arc<T>):    |       N       |   usize::MAX   |
 ///                     +---------------+----------------+
@@ -129,7 +142,7 @@ enum Kind {
 /// properly reconstruct the fundamental `&[u8]` that backs the `str`. This means we're limited to inlining strings up
 /// to a length of `2*N-1`: our normal pointer field becomes optional (its discriminant is our now our
 /// inlined/non-inlined discriminant) which means we lose a word, but since there is no known platform that Rust
-/// supports where two words would be over 255 bytes total, we can use a single `u8` to hold our string length.
+/// supports where two words would be over 255 bytes total, we can use a single `u8` to safely hold our string length.
 ///
 /// Practically, this means strings up to 15 bytes can be inlined on 64-bit platforms, while 32-bit platforms are
 /// limited to 7 bytes.
@@ -137,7 +150,7 @@ enum Kind {
 /// # Notes
 ///
 /// [1] - technically, `Vec<T>` can have a capacity greater than `isize::MAX` when storing zero-sized types, but we
-/// don't do that here, so we always enforce that an owned version's capacity cannot be `usize::MAX` when constructing `Cow2`
+/// don't do that here, so we always enforce that an owned version's capacity cannot be `usize::MAX` when constructing `Cow2`.
 pub struct Cow2<'a, T: Cow2able + ?Sized + 'a> {
     /// Pointer to data.
     ptr: Option<NonNull<T::Pointer>>,
@@ -267,6 +280,145 @@ where
         T::drop_from_parts(self.ptr, &self.inner);
     }
 }
+
+impl<T> Hash for Cow2<'_, T>
+where
+    T: Hash + Cow2able + ?Sized,
+{
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.deref().hash(state)
+    }
+}
+
+impl<'a, T> Default for Cow2<'a, T>
+where
+    T: Cow2able + ?Sized,
+    &'a T: Default,
+{
+    #[inline]
+    fn default() -> Self {
+        Cow2::from_borrowed(Default::default())
+    }
+}
+
+impl<T> Eq for Cow2<'_, T> where T: Eq + Cow2able + ?Sized {}
+
+impl<A, B> PartialOrd<Cow2<'_, B>> for Cow2<'_, A>
+where
+    A: Cow2able + ?Sized + PartialOrd<B>,
+    B: Cow2able + ?Sized,
+{
+    #[inline]
+    fn partial_cmp(&self, other: &Cow2<'_, B>) -> Option<Ordering> {
+        PartialOrd::partial_cmp(self.deref(), other.deref())
+    }
+}
+
+impl<T> Ord for Cow2<'_, T>
+where
+    T: Ord + Cow2able + ?Sized,
+{
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        Ord::cmp(self.deref(), other.deref())
+    }
+}
+
+impl<'a, T> From<&'a T> for Cow2<'a, T>
+where
+    T: Cow2able + ?Sized,
+{
+    #[inline]
+    fn from(val: &'a T) -> Self {
+        Cow2::from_borrowed(val)
+    }
+}
+
+impl From<std::borrow::Cow<'static, str>> for Cow2<'_, str> {
+    #[inline]
+    fn from(s: std::borrow::Cow<'static, str>) -> Self {
+        match s {
+            std::borrow::Cow::Borrowed(bs) => Cow2::from_borrowed(bs),
+            std::borrow::Cow::Owned(os) => Cow2::from_owned(os),
+        }
+    }
+}
+
+impl From<String> for Cow2<'_, str> {
+    #[inline]
+    fn from(s: String) -> Self {
+        Cow2::from_owned(s)
+    }
+}
+
+impl From<Vec<Label>> for Cow2<'_, [Label]> {
+    #[inline]
+    fn from(v: Vec<Label>) -> Self {
+        Cow2::from_owned(v)
+    }
+}
+
+impl From<Vec<Cow2<'static, str>>> for Cow2<'_, [Cow2<'static, str>]> {
+    #[inline]
+    fn from(v: Vec<Cow2<'static, str>>) -> Self {
+        Cow2::from_owned(v)
+    }
+}
+
+impl<T> AsRef<T> for Cow2<'_, T>
+where
+    T: Cow2able + ?Sized,
+{
+    #[inline]
+    fn as_ref(&self) -> &T {
+        self.borrow()
+    }
+}
+
+impl<T> Borrow<T> for Cow2<'_, T>
+where
+    T: Cow2able + ?Sized,
+{
+    #[inline]
+    fn borrow(&self) -> &T {
+        self.deref()
+    }
+}
+
+impl<A, B> PartialEq<Cow2<'_, B>> for Cow2<'_, A>
+where
+    A: Cow2able + ?Sized,
+    B: Cow2able + ?Sized,
+    A: PartialEq<B>,
+{
+    fn eq(&self, other: &Cow2<B>) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl<T> fmt::Debug for Cow2<'_, T>
+where
+    T: Cow2able + fmt::Debug + ?Sized,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl<T> fmt::Display for Cow2<'_, T>
+where
+    T: Cow2able + fmt::Display + ?Sized,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+unsafe impl<T: Cow2able + Sync + ?Sized> Sync for Cow2<'_, T> {}
+unsafe impl<T: Cow2able + Send + ?Sized> Send for Cow2<'_, T> {}
 
 // Implementations of constant functions for creating `Cow` via static strings, static string
 // slices, and static label slices.
