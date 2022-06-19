@@ -3,8 +3,8 @@
 use lockfree_object_pool::{LinearObjectPool, LinearOwnedReusable};
 use metrics::{Key, Label};
 use once_cell::sync::OnceCell;
-use std::sync::Arc;
 use std::{any::TypeId, marker::PhantomData};
+use std::{ops::Deref, sync::Arc};
 use tracing_core::span::{Attributes, Id, Record};
 use tracing_core::{field::Visit, Dispatch, Field, Subscriber};
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
@@ -28,7 +28,10 @@ impl Labels {
 
 impl Default for Labels {
     fn default() -> Self {
-        Labels(get_pool().pull_owned())
+        let data = get_pool().pull_owned();
+        println!("data: {:?}", data.deref());
+
+        Labels(data)
     }
 }
 

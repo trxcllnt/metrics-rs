@@ -135,6 +135,17 @@ impl Snapshotter {
         Snapshot(snapshot)
     }
 
+    /// Clears all data from the recorder for the current thread.
+    ///
+    /// If there is no per-thread recorder installed, this does nothing.
+    pub fn clear_current_thread() {
+        PER_THREAD_INNER.with(|maybe_inner| {
+            if let Some(inner) = maybe_inner.borrow().as_ref() {
+                inner.registry.clear();
+            }
+        });
+    }
+
     /// Takes a snapshot of the recorder for the current thread only.
     ///
     /// If no registry exists for the current thread, `None` is returned. Otherwise, `Some(snapshot)` is returned.
@@ -301,7 +312,7 @@ impl Recorder for DebuggingRecorder {
                 // Create the inner state if it doesn't yet exist.
                 //
                 // SAFETY: It's safe to use `borrow_mut` here, even though the parent method is `&self`, as this is a
-                // per-thread invocation, so no other caller could possibly be holding a referenced, immutable or
+                // per-thread invocation, so no other caller could possibly be holding a reference, immutable or
                 // mutable, at the same time.
                 let mut maybe_inner = cell.borrow_mut();
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
@@ -322,7 +333,7 @@ impl Recorder for DebuggingRecorder {
                 // Create the inner state if it doesn't yet exist.
                 //
                 // SAFETY: It's safe to use `borrow_mut` here, even though the parent method is `&self`, as this is a
-                // per-thread invocation, so no other caller could possibly be holding a referenced, immutable or
+                // per-thread invocation, so no other caller could possibly be holding a reference, immutable or
                 // mutable, at the same time.
                 let mut maybe_inner = cell.borrow_mut();
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
@@ -343,7 +354,7 @@ impl Recorder for DebuggingRecorder {
                 // Create the inner state if it doesn't yet exist.
                 //
                 // SAFETY: It's safe to use `borrow_mut` here, even though the parent method is `&self`, as this is a
-                // per-thread invocation, so no other caller could possibly be holding a referenced, immutable or
+                // per-thread invocation, so no other caller could possibly be holding a reference, immutable or
                 // mutable, at the same time.
                 let mut maybe_inner = cell.borrow_mut();
                 let inner = maybe_inner.get_or_insert_with(Inner::new);

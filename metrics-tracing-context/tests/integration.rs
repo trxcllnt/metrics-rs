@@ -2,12 +2,12 @@ use metrics::{counter, Key, KeyName, Label};
 use metrics_tracing_context::{LabelFilter, MetricsLayer, TracingContextLayer};
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use metrics_util::{layers::Layer, CompositeKey, MetricKind};
-use parking_lot::{const_mutex, Mutex, MutexGuard};
-use tracing::dispatcher::{set_default, DefaultGuard, Dispatch};
+use once_cell::sync::OnceCell;
+use tracing::dispatcher::{with_default, Dispatch};
 use tracing::{span, Level};
 use tracing_subscriber::{layer::SubscriberExt, Registry};
 
-static TEST_MUTEX: Mutex<()> = const_mutex(());
+static RECORDER: OnceCell<()> = OnceCell::new();
 static LOGIN_ATTEMPTS: &'static str = "login_attempts";
 static LOGIN_ATTEMPTS_NONE: &'static str = "login_attempts_no_labels";
 static LOGIN_ATTEMPTS_STATIC: &'static str = "login_attempts_static_labels";
@@ -61,43 +61,43 @@ static SAME_CALLSITE_PATH_2: &'static [Label] = &[
     Label::from_static_parts("path2_specific_dynamic", "bar_dynamic"),
 ];
 
-struct TestGuard {
-    _test_mutex_guard: MutexGuard<'static, ()>,
-    _tracing_guard: DefaultGuard,
-}
-
-fn setup<F>(layer: TracingContextLayer<F>) -> (TestGuard, Snapshotter)
+fn with_layer<F, F2, O>(layer: TracingContextLayer<F>, f: F2) -> O
 where
     F: LabelFilter + Clone + 'static,
+    F2: FnOnce() -> O,
 {
-    let test_mutex_guard = TEST_MUTEX.lock();
+    // Make sure we have the `DebuggingRecorder` installed, and that if there's already a per-thread registry on this
+    // thread, that it's cleared before running `f`.
+    let _ = RECORDER.get_or_init(|| {
+        let recorder = DebuggingRecorder::per_thread();
+        let recorder = layer.layer(recorder);
+
+        metrics::set_boxed_recorder(Box::new(recorder)).expect("failed to install recorder");
+    });
+
+    Snapshotter::clear_current_thread();
+
+    // Now creating a new `tracing` registry using the given context layer and set the dispatcher for this thread, and
+    // run `f` within that context.
     let subscriber = Registry::default().with(MetricsLayer::new());
-    let tracing_guard = set_default(&Dispatch::new(subscriber));
-
-    let recorder = DebuggingRecorder::new();
-    let snapshotter = recorder.snapshotter();
-    let recorder = layer.layer(recorder);
-
-    unsafe { metrics::clear_recorder() };
-    metrics::set_boxed_recorder(Box::new(recorder)).expect("failed to install recorder");
-
-    let test_guard =
-        TestGuard { _test_mutex_guard: test_mutex_guard, _tracing_guard: tracing_guard };
-    (test_guard, snapshotter)
+    let dispatch = Dispatch::new(subscriber);
+    with_default(&dispatch, f)
 }
 
 #[test]
 fn test_basic_functionality() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::all());
+    let snapshot = with_layer(TracingContextLayer::all(), || {
+        let user = "ferris";
+        let email = "ferris@rust-lang.org";
+        let span = span!(Level::TRACE, "login", user, user.email = email);
+        let _guard = span.enter();
 
-    let user = "ferris";
-    let email = "ferris@rust-lang.org";
-    let span = span!(Level::TRACE, "login", user, user.email = email);
-    let _guard = span.enter();
+        counter!("login_attempts", 1, "service" => "login_service");
 
-    counter!("login_attempts", 1, "service" => "login_service");
-
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
@@ -115,25 +115,27 @@ fn test_basic_functionality() {
 
 #[test]
 fn test_macro_forms() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::all());
+    let snapshot = with_layer(TracingContextLayer::all(), || {
+        let user = "ferris";
+        let email = "ferris@rust-lang.org";
+        let span = span!(Level::TRACE, "login", user, user.email = email);
+        let _guard = span.enter();
 
-    let user = "ferris";
-    let email = "ferris@rust-lang.org";
-    let span = span!(Level::TRACE, "login", user, user.email = email);
-    let _guard = span.enter();
-
-    // No labels.
-    counter!("login_attempts_no_labels", 1);
-    // Static labels only.
-    counter!("login_attempts_static_labels", 1, "service" => "login_service");
-    // Dynamic labels only.
-    let node_name = "localhost".to_string();
-    counter!("login_attempts_dynamic_labels", 1, "node_name" => node_name.clone());
-    // Static and dynamic.
-    counter!("login_attempts_static_and_dynamic_labels", 1,
+        // No labels.
+        counter!("login_attempts_no_labels", 1);
+        // Static labels only.
+        counter!("login_attempts_static_labels", 1, "service" => "login_service");
+        // Dynamic labels only.
+        let node_name = "localhost".to_string();
+        counter!("login_attempts_dynamic_labels", 1, "node_name" => node_name.clone());
+        // Static and dynamic.
+        counter!("login_attempts_static_and_dynamic_labels", 1,
         "service" => "login_service", "node_name" => node_name.clone());
 
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
@@ -180,14 +182,16 @@ fn test_macro_forms() {
 
 #[test]
 fn test_no_labels() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::all());
+    let snapshot = with_layer(TracingContextLayer::all(), || {
+        let span = span!(Level::TRACE, "login");
+        let _guard = span.enter();
 
-    let span = span!(Level::TRACE, "login");
-    let _guard = span.enter();
+        counter!("login_attempts", 1);
 
-    counter!("login_attempts", 1);
-
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
@@ -202,42 +206,44 @@ fn test_no_labels() {
 
 #[test]
 fn test_multiple_paths_to_the_same_callsite() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::all());
+    let snapshot = with_layer(TracingContextLayer::all(), || {
+        let shared_fn = || {
+            counter!("my_counter", 1);
+        };
 
-    let shared_fn = || {
-        counter!("my_counter", 1);
-    };
+        let path1 = || {
+            let path1_specific_dynamic = "foo_dynamic";
+            let span = span!(
+                Level::TRACE,
+                "path1",
+                shared_field = "path1",
+                path1_specific = "foo",
+                path1_specific_dynamic,
+            );
+            let _guard = span.enter();
+            shared_fn();
+        };
 
-    let path1 = || {
-        let path1_specific_dynamic = "foo_dynamic";
-        let span = span!(
-            Level::TRACE,
-            "path1",
-            shared_field = "path1",
-            path1_specific = "foo",
-            path1_specific_dynamic,
-        );
-        let _guard = span.enter();
-        shared_fn();
-    };
+        let path2 = || {
+            let path2_specific_dynamic = "bar_dynamic";
+            let span = span!(
+                Level::TRACE,
+                "path2",
+                shared_field = "path2",
+                path2_specific = "bar",
+                path2_specific_dynamic,
+            );
+            let _guard = span.enter();
+            shared_fn();
+        };
 
-    let path2 = || {
-        let path2_specific_dynamic = "bar_dynamic";
-        let span = span!(
-            Level::TRACE,
-            "path2",
-            shared_field = "path2",
-            path2_specific = "bar",
-            path2_specific_dynamic,
-        );
-        let _guard = span.enter();
-        shared_fn();
-    };
+        path1();
+        path2();
 
-    path1();
-    path2();
-
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
@@ -266,38 +272,40 @@ fn test_multiple_paths_to_the_same_callsite() {
 
 #[test]
 fn test_nested_spans() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::all());
+    let snapshot = with_layer(TracingContextLayer::all(), || {
+        let inner = || {
+            let inner_specific_dynamic = "foo_dynamic";
+            let span = span!(
+                Level::TRACE,
+                "inner",
+                shared_field = "inner",
+                inner_specific = "foo",
+                inner_specific_dynamic,
+            );
+            let _guard = span.enter();
 
-    let inner = || {
-        let inner_specific_dynamic = "foo_dynamic";
-        let span = span!(
-            Level::TRACE,
-            "inner",
-            shared_field = "inner",
-            inner_specific = "foo",
-            inner_specific_dynamic,
-        );
-        let _guard = span.enter();
+            counter!("my_counter", 1);
+        };
 
-        counter!("my_counter", 1);
-    };
+        let outer = || {
+            let outer_specific_dynamic = "bar_dynamic";
+            let span = span!(
+                Level::TRACE,
+                "outer",
+                shared_field = "outer",
+                outer_specific = "bar",
+                outer_specific_dynamic,
+            );
+            let _guard = span.enter();
+            inner();
+        };
 
-    let outer = || {
-        let outer_specific_dynamic = "bar_dynamic";
-        let span = span!(
-            Level::TRACE,
-            "outer",
-            shared_field = "outer",
-            outer_specific = "bar",
-            outer_specific_dynamic,
-        );
-        let _guard = span.enter();
-        inner();
-    };
+        outer();
 
-    outer();
-
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
@@ -324,16 +332,18 @@ impl LabelFilter for OnlyUser {
 
 #[test]
 fn test_label_filtering() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::new(OnlyUser));
+    let snapshot = with_layer(TracingContextLayer::new(OnlyUser), || {
+        let user = "ferris";
+        let email = "ferris@rust-lang.org";
+        let span = span!(Level::TRACE, "login", user, user.email_span = email);
+        let _guard = span.enter();
 
-    let user = "ferris";
-    let email = "ferris@rust-lang.org";
-    let span = span!(Level::TRACE, "login", user, user.email_span = email);
-    let _guard = span.enter();
+        counter!("login_attempts", 1, "user.email" => "ferris@rust-lang.org");
 
-    counter!("login_attempts", 1, "user.email" => "ferris@rust-lang.org");
-
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
@@ -351,23 +361,25 @@ fn test_label_filtering() {
 
 #[test]
 fn test_label_allowlist() {
-    let (_guard, snapshotter) = setup(TracingContextLayer::only_allow(&["env", "service"]));
+    let snapshot = with_layer(TracingContextLayer::only_allow(&["env", "service"]), || {
+        let user = "ferris";
+        let email = "ferris@rust-lang.org";
+        let span = span!(
+            Level::TRACE,
+            "login",
+            user,
+            user.email_span = email,
+            service = "login_service",
+            env = "test"
+        );
+        let _guard = span.enter();
 
-    let user = "ferris";
-    let email = "ferris@rust-lang.org";
-    let span = span!(
-        Level::TRACE,
-        "login",
-        user,
-        user.email_span = email,
-        service = "login_service",
-        env = "test"
-    );
-    let _guard = span.enter();
+        counter!("login_attempts", 1);
 
-    counter!("login_attempts", 1);
-
-    let snapshot = snapshotter.snapshot().into_vec();
+        Snapshotter::current_thread_snapshot()
+            .expect("must be registry after emitting metric")
+            .into_vec()
+    });
 
     assert_eq!(
         snapshot,
