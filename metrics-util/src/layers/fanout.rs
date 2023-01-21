@@ -6,12 +6,13 @@ use metrics::{
 };
 
 struct FanoutCounter {
+    key: Key,
     counters: Vec<Counter>,
 }
 
 impl FanoutCounter {
-    pub fn from_counters(counters: Vec<Counter>) -> Self {
-        Self { counters }
+    pub fn from_counters(key: Key, counters: Vec<Counter>) -> Self {
+        Self { key, counters }
     }
 }
 
@@ -36,12 +37,13 @@ impl From<FanoutCounter> for Counter {
 }
 
 struct FanoutGauge {
+    key: Key,
     gauges: Vec<Gauge>,
 }
 
 impl FanoutGauge {
-    pub fn from_gauges(gauges: Vec<Gauge>) -> Self {
-        Self { gauges }
+    pub fn from_gauges(key: Key, gauges: Vec<Gauge>) -> Self {
+        Self { key, gauges }
     }
 }
 
@@ -72,12 +74,13 @@ impl From<FanoutGauge> for Gauge {
 }
 
 struct FanoutHistogram {
+    key: Key,
     histograms: Vec<Histogram>,
 }
 
 impl FanoutHistogram {
-    pub fn from_histograms(histograms: Vec<Histogram>) -> Self {
-        Self { histograms }
+    pub fn from_histograms(key: Key, histograms: Vec<Histogram>) -> Self {
+        Self { key, histograms }
     }
 }
 
@@ -123,20 +126,20 @@ impl Recorder for Fanout {
         let counters =
             self.recorders.iter().map(|recorder| recorder.register_counter(key)).collect();
 
-        FanoutCounter::from_counters(counters).into()
+        FanoutCounter::from_counters(key.clone(), counters).into()
     }
 
     fn register_gauge(&self, key: &Key) -> Gauge {
         let gauges = self.recorders.iter().map(|recorder| recorder.register_gauge(key)).collect();
 
-        FanoutGauge::from_gauges(gauges).into()
+        FanoutGauge::from_gauges(key.clone(), gauges).into()
     }
 
     fn register_histogram(&self, key: &Key) -> Histogram {
         let histograms =
             self.recorders.iter().map(|recorder| recorder.register_histogram(key)).collect();
 
-        FanoutHistogram::from_histograms(histograms).into()
+        FanoutHistogram::from_histograms(key.clone(), histograms).into()
     }
 }
 

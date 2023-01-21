@@ -301,10 +301,14 @@ impl Recorder for DebuggingRecorder {
                 let mut maybe_inner = cell.borrow_mut();
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
 
-                inner.registry.get_or_create_counter(key, |c| Counter::from_arc(c.clone()))
+                inner.registry.get_or_create_counter(key, |c| {
+                    Counter::from_arc(key.clone(), Arc::downgrade(c))
+                })
             })
         } else {
-            self.inner.registry.get_or_create_counter(key, |c| Counter::from_arc(c.clone()))
+            self.inner
+                .registry
+                .get_or_create_counter(key, |c| Counter::from_arc(key.clone(), Arc::downgrade(c)))
         }
     }
 
@@ -322,10 +326,14 @@ impl Recorder for DebuggingRecorder {
                 let mut maybe_inner = cell.borrow_mut();
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
 
-                inner.registry.get_or_create_gauge(key, |g| Gauge::from_arc(g.clone()))
+                inner
+                    .registry
+                    .get_or_create_gauge(key, |g| Gauge::from_arc(key.clone(), Arc::downgrade(g)))
             })
         } else {
-            self.inner.registry.get_or_create_gauge(key, |g| Gauge::from_arc(g.clone()))
+            self.inner
+                .registry
+                .get_or_create_gauge(key, |g| Gauge::from_arc(key.clone(), Arc::downgrade(g)))
         }
     }
 
@@ -343,10 +351,14 @@ impl Recorder for DebuggingRecorder {
                 let mut maybe_inner = cell.borrow_mut();
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
 
-                inner.registry.get_or_create_histogram(key, |h| Histogram::from_arc(h.clone()))
+                inner.registry.get_or_create_histogram(key, |h| {
+                    Histogram::from_arc(key.clone(), Arc::downgrade(h))
+                })
             })
         } else {
-            self.inner.registry.get_or_create_histogram(key, |h| Histogram::from_arc(h.clone()))
+            self.inner.registry.get_or_create_histogram(key, |h| {
+                Histogram::from_arc(key.clone(), Arc::downgrade(h))
+            })
         }
     }
 }

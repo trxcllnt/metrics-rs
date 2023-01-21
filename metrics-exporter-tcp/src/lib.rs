@@ -316,15 +316,15 @@ impl Recorder for TcpRecorder {
     }
 
     fn register_counter(&self, key: &Key) -> Counter {
-        Counter::from_arc(Arc::new(Handle::new(key.clone(), self.state.clone())))
+        Counter::from_arc(key.clone(), Arc::new(Handle::new(key.clone(), self.state.clone())))
     }
 
     fn register_gauge(&self, key: &Key) -> Gauge {
-        Gauge::from_arc(Arc::new(Handle::new(key.clone(), self.state.clone())))
+        Gauge::from_arc(key.clone(), Arc::new(Handle::new(key.clone(), self.state.clone())))
     }
 
     fn register_histogram(&self, key: &Key) -> Histogram {
-        Histogram::from_arc(Arc::new(Handle::new(key.clone(), self.state.clone())))
+        Histogram::from_arc(key.clone(), Arc::new(Handle::new(key.clone(), self.state.clone())))
     }
 }
 
