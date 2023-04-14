@@ -268,6 +268,9 @@ mod cow;
 mod handles;
 pub use self::handles::*;
 
+pub(crate) mod hash;
+pub use self::hash::KeyHasher;
+
 mod key;
 pub use self::key::*;
 

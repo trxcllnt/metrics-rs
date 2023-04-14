@@ -1,7 +1,3 @@
-use std::hash::Hasher;
-
-use ahash::AHasher;
-
 use crate::cow::Cow;
 
 /// An allocation-optimized string.
@@ -13,25 +9,6 @@ use crate::cow::Cow;
 /// `SharedString` can be converted to from either `&'static str` or `String`, with a method,
 /// `const_str`, from constructing `SharedString` from `&'static str` in a `const` fashion.
 pub type SharedString = Cow<'static, str>;
-
-/// Key-specific hashing algorithm.
-///
-/// Currently uses AHash - <https://github.com/tkaitchuck/aHash>
-///
-/// For any use-case within a `metrics`-owned or adjacent crate, where hashing of a key is required,
-/// this is the hasher that will be used.
-#[derive(Default)]
-pub struct KeyHasher(AHasher);
-
-impl Hasher for KeyHasher {
-    fn finish(&self) -> u64 {
-        self.0.finish()
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.write(bytes)
-    }
-}
 
 /// Value of a gauge operation.
 #[derive(Clone, Debug)]

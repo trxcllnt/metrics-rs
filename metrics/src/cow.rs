@@ -83,6 +83,10 @@ impl<'a> Cow<'a, str> {
             marker: PhantomData,
         }
     }
+
+    pub const fn const_as_ref(&self) -> &str {
+        unsafe { const_str_ref_from_parts(self.ptr, self.meta) }
+    }
 }
 
 impl<'a> Cow<'a, [Cow<'static, str>]> {
@@ -448,12 +452,12 @@ pub struct Metadata(usize, usize);
 
 impl Metadata {
     #[inline]
-    fn length(&self) -> usize {
+    const fn length(&self) -> usize {
         self.0
     }
 
     #[inline]
-    fn capacity(&self) -> usize {
+    const fn capacity(&self) -> usize {
         self.1
     }
 
@@ -504,11 +508,11 @@ impl Metadata {
 
     pub const fn from_owned(len: usize, capacity: usize) -> Metadata {
         if len & MASK_HI != 0 {
-            panic!("Cow: length out of bounds for owned value");
+            panic!("length out of bounds for owned value");
         }
 
         if capacity & MASK_HI != 0 {
-            panic!("Cow: capacity out of bounds for owned value");
+            panic!("capacity out of bounds for owned value");
         }
 
         Metadata((capacity & MASK_LO) << 32 | len & MASK_LO)
@@ -522,3 +526,21 @@ impl Metadata {
         Metadata(1 << 32)
     }
 }*/
+
+const unsafe fn const_str_ref_from_parts<'a>(ptr: NonNull<u8>, metadata: Metadata) -> &'a str {
+    // SAFETY:
+    //
+    // - We only call this method via `Cow<'a, str>`, so we know we're dealing with a string.
+    // - If we're in a const context, we can't possibly be dealing with a `String`, and even if
+    //   support for that gets added to const, our metadata tracks the length of the string anyways.
+    // - On top of thait, `String`'s own method for getting a pointer looks like this:
+    //   `self as *const str as *const u8` so we should be safe, layout-wise.
+    // - Our string pointer is already aligned, as we didn't manually construct it nor do we modify
+    //   it after storing it.
+    // - We're handing out an immutable reference bound to the lifetime of the CoW structure itself.
+    // - The caller ensures the lifetime is tied to the CoW structure itself.
+
+    // Convert our pointer back to a byte slice, and then back to a string.
+    let raw_bytes = std::slice::from_raw_parts(ptr.as_ptr() as *const _, metadata.length());
+    std::str::from_utf8_unchecked(raw_bytes)
+}

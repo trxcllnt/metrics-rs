@@ -1,12 +1,11 @@
-use crate::{cow::Cow, IntoLabels, KeyHasher, Label, SharedString};
+use crate::{
+    cow::Cow,
+    hash::{Fnv1aHasher, KeyHasher},
+    IntoLabels, Label, SharedString,
+};
 use alloc::{string::String, vec::Vec};
 use core::{fmt, hash::Hash, slice::Iter};
-use portable_atomic::AtomicU64;
-use std::{
-    cmp,
-    hash::Hasher,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{cmp, hash::Hasher};
 
 const NO_LABELS: [Label; 0] = [];
 
@@ -53,12 +52,11 @@ impl From<String> for KeyName {
 /// generated.  We personally allow this Clippy lint in places where we store the key, such as
 /// helper types in the `metrics-util` crate, and you may need to do the same if you're using it in
 /// such a way as well.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Key {
     name: KeyName,
     labels: Cow<'static, [Label]>,
-    hashed: AtomicBool,
-    hash: AtomicU64,
+    hash: u64,
 }
 
 impl Key {
@@ -90,12 +88,7 @@ impl Key {
     where
         N: Into<KeyName>,
     {
-        Self {
-            name: name.into(),
-            labels: Cow::<[Label]>::const_slice(labels),
-            hashed: AtomicBool::new(false),
-            hash: AtomicU64::new(0),
-        }
+        Self::builder(name.into(), Cow::<[Label]>::const_slice(labels))
     }
 
     /// Creates a [`Key`] from a static name.
@@ -112,15 +105,16 @@ impl Key {
         Self {
             name: KeyName::from_const_str(name),
             labels: Cow::<[Label]>::const_slice(labels),
-            hashed: AtomicBool::new(false),
-            hash: AtomicU64::new(0),
+            hash: const_hasher(name, labels),
         }
     }
 
     fn builder(name: KeyName, labels: Cow<'static, [Label]>) -> Self {
-        let hash = generate_key_hash(&name, &labels);
+        let mut hasher = Fnv1aHasher::new();
+        non_const_hasher(&mut hasher, &name, &labels);
+        let hash = hasher.finish();
 
-        Self { name, labels, hashed: AtomicBool::new(true), hash: AtomicU64::new(hash) }
+        Self { name, labels, hash }
     }
 
     /// Name of this key.
@@ -153,37 +147,39 @@ impl Key {
 
     /// Gets the hash value for this key.
     pub fn get_hash(&self) -> u64 {
-        if self.hashed.load(Ordering::Acquire) {
-            self.hash.load(Ordering::Acquire)
-        } else {
-            let hash = generate_key_hash(&self.name, &self.labels);
-            self.hash.store(hash, Ordering::Release);
-            self.hashed.store(true, Ordering::Release);
-            hash
-        }
+        self.hash
     }
 }
 
-fn generate_key_hash(name: &KeyName, labels: &Cow<'static, [Label]>) -> u64 {
-    let mut hasher = KeyHasher::default();
-    key_hasher_impl(&mut hasher, name, labels);
-    hasher.finish()
-}
-
-fn key_hasher_impl<H: Hasher>(state: &mut H, name: &KeyName, labels: &Cow<'static, [Label]>) {
-    name.0.hash(state);
-    labels.hash(state);
-}
-
-impl Clone for Key {
-    fn clone(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            labels: self.labels.clone(),
-            hashed: AtomicBool::new(self.hashed.load(Ordering::Acquire)),
-            hash: AtomicU64::new(self.hash.load(Ordering::Acquire)),
-        }
+const fn const_hasher(name: &'static str, labels: &'static [Label]) -> u64 {
+    let mut hasher = KeyHasher::new();
+    hasher = const_hash_str(hasher, name);
+    let mut i = 0;
+    let n = labels.len();
+    while i < n {
+        hasher = const_hash_str(hasher, labels[i].0.const_as_ref());
+        hasher = const_hash_str(hasher, labels[i].1.const_as_ref());
+        i += 1;
     }
+
+    hasher.const_finish()
+}
+
+const fn const_hash_str(hasher: KeyHasher, s: &str) -> KeyHasher {
+    hasher.const_write(s.as_bytes())
+}
+
+fn non_const_hasher<H: Hasher>(state: &mut H, name: &KeyName, labels: &Cow<'static, [Label]>) {
+    non_const_hash_str(state, name.as_str());
+
+    for label in labels.as_ref() {
+        non_const_hash_str(state, label.0.as_ref());
+        non_const_hash_str(state, label.1.as_ref());
+    }
+}
+
+fn non_const_hash_str<H: Hasher>(state: &mut H, s: &str) {
+    state.write(s.as_bytes());
 }
 
 impl PartialEq for Key {
@@ -208,7 +204,7 @@ impl Ord for Key {
 
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        key_hasher_impl(state, &self.name, &self.labels);
+        non_const_hasher(state, &self.name, &self.labels);
     }
 }
 
@@ -257,8 +253,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::Key;
-    use crate::Label;
-    use std::collections::HashMap;
+    use crate::{hash::KeyHasher, Label};
+    use std::{
+        collections::HashMap,
+        hash::{Hash, Hasher},
+    };
 
     static BORROWED_NAME: &'static str = "name";
     static FOOBAR_NAME: &'static str = "foobar";
@@ -350,5 +349,30 @@ mod tests {
         );
         let result4 = key4.to_string();
         assert_eq!(result4, "Key(foobar, [black = black, lives = lives, matter = matter])");
+    }
+
+    #[test]
+    fn test_static_vs_dynamic_hashing() {
+        let get_non_const_hash = |key: &Key| {
+            let mut hasher = KeyHasher::new();
+            key.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        let from_name = Key::from_name(FOOBAR_NAME);
+        let from_static_name = Key::from_static_name(FOOBAR_NAME);
+        assert_eq!(from_name.get_hash(), from_static_name.get_hash());
+        assert_eq!(get_non_const_hash(&from_name), from_name.get_hash());
+        assert_eq!(get_non_const_hash(&from_static_name), from_static_name.get_hash());
+        assert_eq!(from_name.get_hash(), from_static_name.get_hash());
+
+        let from_parts = Key::from_parts(FOOBAR_NAME, LABELS.iter());
+        let from_static_labels = Key::from_static_labels(FOOBAR_NAME, &LABELS);
+        let from_static_parts = Key::from_static_parts(FOOBAR_NAME, &LABELS);
+        assert_eq!(get_non_const_hash(&from_parts), from_parts.get_hash());
+        assert_eq!(get_non_const_hash(&from_static_labels), from_static_labels.get_hash());
+        assert_eq!(get_non_const_hash(&from_static_parts), from_static_parts.get_hash());
+        assert_eq!(from_parts.get_hash(), from_static_labels.get_hash());
+        assert_eq!(from_static_labels.get_hash(), from_static_parts.get_hash());
     }
 }
