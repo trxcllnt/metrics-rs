@@ -18,8 +18,8 @@ use crate::{
     CompositeKey,
 };
 
-use indexmap::IndexMap;
-use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit};
+use indexmap::{IndexMap, IndexSet};
+use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, Attribute};
 use ordered_float::OrderedFloat;
 
 thread_local! {
@@ -39,22 +39,21 @@ impl CompositeKeyName {
 }
 
 /// A point-in-time snapshot of all metrics in [`DebuggingRecorder`].
-pub struct Snapshot(Vec<(CompositeKey, Option<Unit>, Option<SharedString>, DebugValue)>);
+pub struct Snapshot(Vec<(CompositeKey, DebugValue)>);
 
 impl Snapshot {
     /// Converts this snapshot to a mapping of metric data, keyed by the metric key itself.
     #[allow(clippy::mutable_key_type)]
     pub fn into_hashmap(
         self,
-    ) -> HashMap<CompositeKey, (Option<Unit>, Option<SharedString>, DebugValue)> {
+    ) -> HashMap<CompositeKey, DebugValue> {
         self.0
             .into_iter()
-            .map(|(k, unit, desc, value)| (k, (unit, desc, value)))
-            .collect::<HashMap<_, _>>()
+            .collect()
     }
 
     /// Converts this snapshot to a vector of metric data tuples.
-    pub fn into_vec(self) -> Vec<(CompositeKey, Option<Unit>, Option<SharedString>, DebugValue)> {
+    pub fn into_vec(self) -> Vec<(CompositeKey, DebugValue)> {
         self.0
     }
 }
@@ -64,23 +63,25 @@ impl Snapshot {
 pub enum DebugValue {
     /// Counter.
     Counter(u64),
+
     /// Gauge.
     Gauge(OrderedFloat<f64>),
+
     /// Histogram.
     Histogram(Vec<OrderedFloat<f64>>),
 }
 
 struct Inner {
     registry: Registry<Key, AtomicStorage>,
-    seen: Mutex<IndexMap<CompositeKey, ()>>,
-    metadata: Mutex<IndexMap<CompositeKeyName, (Option<Unit>, SharedString)>>,
+    seen: Mutex<IndexSet<CompositeKey>>,
+    metadata: Mutex<IndexMap<CompositeKeyName, Vec<Box<dyn Attribute>>>>,
 }
 
 impl Inner {
     fn new() -> Self {
         Self {
             registry: Registry::atomic(),
-            seen: Mutex::new(IndexMap::new()),
+            seen: Mutex::new(IndexSet::new()),
             metadata: Mutex::new(IndexMap::new()),
         }
     }
@@ -101,9 +102,8 @@ impl Snapshotter {
         let histograms = self.inner.registry.get_histogram_handles();
 
         let seen = self.inner.seen.lock().expect("seen lock poisoned").clone();
-        let metadata = self.inner.metadata.lock().expect("metadata lock poisoned").clone();
 
-        for (ck, _) in seen.into_iter() {
+        for ck in seen.into_iter() {
             let value = match ck.kind() {
                 MetricKind::Counter => {
                     counters.get(ck.key()).map(|c| DebugValue::Counter(c.load(Ordering::SeqCst)))
@@ -119,16 +119,10 @@ impl Snapshotter {
                 }),
             };
 
-            let ckn = CompositeKeyName::new(ck.kind(), ck.key().name().to_string().into());
-            let (unit, desc) = metadata
-                .get(&ckn)
-                .map(|(u, d)| (u.to_owned(), Some(d.to_owned())))
-                .unwrap_or_else(|| (None, None));
-
             // If there's no value for the key, that means the metric was only ever described, and
             // not registered, so don't emit it.
             if let Some(value) = value {
-                snapshot.push((ck, unit, desc, value));
+                snapshot.push((ck, value));
             }
         }
 
@@ -149,9 +143,8 @@ impl Snapshotter {
                 let histograms = inner.registry.get_histogram_handles();
 
                 let seen = inner.seen.lock().expect("seen lock poisoned").clone();
-                let metadata = inner.metadata.lock().expect("metadata lock poisoned").clone();
 
-                for (ck, _) in seen.into_iter() {
+                for ck in seen.into_iter() {
                     let value = match ck.kind() {
                         MetricKind::Counter => counters
                             .get(ck.key())
@@ -169,16 +162,10 @@ impl Snapshotter {
                         }),
                     };
 
-                    let ckn = CompositeKeyName::new(ck.kind(), ck.key().name().to_string().into());
-                    let (unit, desc) = metadata
-                        .get(&ckn)
-                        .map(|(u, d)| (u.to_owned(), Some(d.to_owned())))
-                        .unwrap_or_else(|| (None, None));
-
                     // If there's no value for the key, that means the metric was only ever described, and
                     // not registered, so don't emit it.
                     if let Some(value) = value {
-                        snapshot.push((ck, unit, desc, value));
+                        snapshot.push((ck, value));
                     }
                 }
 
@@ -222,7 +209,7 @@ impl DebuggingRecorder {
         Snapshotter { inner: Arc::clone(&self.inner) }
     }
 
-    fn describe_metric(&self, rkey: CompositeKeyName, unit: Option<Unit>, desc: SharedString) {
+    fn set_attribute(&self, ckey: CompositeKeyName, attribute: Box<dyn Attribute>) {
         if self.is_per_thread {
             PER_THREAD_INNER.with(|cell| {
                 // Create the inner state if it doesn't yet exist.
@@ -234,19 +221,13 @@ impl DebuggingRecorder {
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
 
                 let mut metadata = inner.metadata.lock().expect("metadata lock poisoned");
-                let (uentry, dentry) = metadata.entry(rkey).or_insert((None, desc.to_owned()));
-                if unit.is_some() {
-                    *uentry = unit;
-                }
-                *dentry = desc.to_owned();
+                let entry = metadata.entry(ckey).or_insert_with(Vec::new);
+                entry.push(attribute);
             });
         } else {
             let mut metadata = self.inner.metadata.lock().expect("metadata lock poisoned");
-            let (uentry, dentry) = metadata.entry(rkey).or_insert((None, desc.to_owned()));
-            if unit.is_some() {
-                *uentry = unit;
-            }
-            *dentry = desc;
+            let entry = metadata.entry(ckey).or_insert_with(Vec::new);
+            entry.push(attribute);
         }
     }
 
@@ -262,11 +243,11 @@ impl DebuggingRecorder {
                 let inner = maybe_inner.get_or_insert_with(Inner::new);
 
                 let mut seen = inner.seen.lock().expect("seen lock poisoned");
-                seen.insert(ckey, ());
+                seen.insert(ckey);
             });
         } else {
             let mut seen = self.inner.seen.lock().expect("seen lock poisoned");
-            seen.insert(ckey, ());
+            seen.insert(ckey);
         }
     }
 
@@ -277,19 +258,19 @@ impl DebuggingRecorder {
 }
 
 impl Recorder for DebuggingRecorder {
-    fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
         let ckey = CompositeKeyName::new(MetricKind::Counter, key);
-        self.describe_metric(ckey, unit, description);
+        self.set_attribute(ckey, attribute);
     }
 
-    fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
         let ckey = CompositeKeyName::new(MetricKind::Gauge, key);
-        self.describe_metric(ckey, unit, description);
+        self.set_attribute(ckey, attribute);
     }
 
-    fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
         let ckey = CompositeKeyName::new(MetricKind::Histogram, key);
-        self.describe_metric(ckey, unit, description);
+        self.set_attribute(ckey, attribute);
     }
 
     fn register_counter(&self, key: &Key) -> Counter {
@@ -405,8 +386,6 @@ mod tests {
             t1_result.into_vec(),
             vec![(
                 CompositeKey::new(MetricKind::Counter, "test_counter".into()),
-                None,
-                None,
                 DebugValue::Counter(43),
             )]
         );
@@ -415,8 +394,6 @@ mod tests {
             t2_result.into_vec(),
             vec![(
                 CompositeKey::new(MetricKind::Counter, "test_counter".into()),
-                None,
-                None,
                 DebugValue::Counter(47),
             )]
         );

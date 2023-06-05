@@ -1,4 +1,4 @@
-use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit};
+use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, Attribute};
 use radix_trie::{Trie, TrieCommon};
 
 use crate::{MetricKind, MetricKindMask};
@@ -39,19 +39,19 @@ impl Router {
 }
 
 impl Recorder for Router {
-    fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        let target = self.route(MetricKind::Counter, key_name.as_str(), &self.counter_routes);
-        target.describe_counter(key_name, unit, description)
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        let target = self.route(MetricKind::Counter, key.as_str(), &self.counter_routes);
+        target.set_counter_attribute(key, attribute);
     }
 
-    fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        let target = self.route(MetricKind::Gauge, key_name.as_str(), &self.gauge_routes);
-        target.describe_gauge(key_name, unit, description)
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        let target = self.route(MetricKind::Gauge, key.as_str(), &self.gauge_routes);
+        target.set_gauge_attribute(key, attribute);
     }
 
-    fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        let target = self.route(MetricKind::Histogram, key_name.as_str(), &self.histogram_routes);
-        target.describe_histogram(key_name, unit, description)
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        let target = self.route(MetricKind::Histogram, key.as_str(), &self.histogram_routes);
+        target.set_histogram_attribute(key, attribute);
     }
 
     fn register_counter(&self, key: &Key) -> Counter {
@@ -161,45 +161,31 @@ impl RouterBuilder {
 
 #[cfg(test)]
 mod tests {
-    use mockall::{mock, predicate::eq, Sequence};
+    use mockall::{predicate::eq, Sequence};
     use std::borrow::Cow;
 
     use super::RouterBuilder;
-    use crate::MetricKindMask;
-    use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit};
-
-    mock! {
-        pub TestRecorder {
-        }
-
-        impl Recorder for TestRecorder {
-            fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString);
-            fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString);
-            fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString);
-            fn register_counter(&self, key: &Key) -> Counter;
-            fn register_gauge(&self, key: &Key) -> Gauge;
-            fn register_histogram(&self, key: &Key) -> Histogram;
-        }
-    }
+    use crate::{MetricKindMask, test_util::MockBasicRecorder};
+    use metrics::{Counter, Histogram, Key, Recorder};
 
     #[test]
     fn test_construction() {
-        let _ = RouterBuilder::from_recorder(MockTestRecorder::new()).build();
+        let _ = RouterBuilder::from_recorder(MockBasicRecorder::new()).build();
 
-        let mut builder = RouterBuilder::from_recorder(MockTestRecorder::new());
+        let mut builder = RouterBuilder::from_recorder(MockBasicRecorder::new());
         builder
-            .add_route(MetricKindMask::COUNTER, "foo", MockTestRecorder::new())
-            .add_route(MetricKindMask::GAUGE, "bar".to_owned(), MockTestRecorder::new())
-            .add_route(MetricKindMask::HISTOGRAM, Cow::Borrowed("baz"), MockTestRecorder::new())
-            .add_route(MetricKindMask::ALL, "quux", MockTestRecorder::new());
+            .add_route(MetricKindMask::COUNTER, "foo", MockBasicRecorder::new())
+            .add_route(MetricKindMask::GAUGE, "bar".to_owned(), MockBasicRecorder::new())
+            .add_route(MetricKindMask::HISTOGRAM, Cow::Borrowed("baz"), MockBasicRecorder::new())
+            .add_route(MetricKindMask::ALL, "quux", MockBasicRecorder::new());
         let _ = builder.build();
     }
 
     #[test]
     #[should_panic]
     fn test_bad_construction() {
-        let mut builder = RouterBuilder::from_recorder(MockTestRecorder::new());
-        builder.add_route(MetricKindMask::NONE, "foo", MockTestRecorder::new());
+        let mut builder = RouterBuilder::from_recorder(MockBasicRecorder::new());
+        builder.add_route(MetricKindMask::NONE, "foo", MockBasicRecorder::new());
         let _ = builder.build();
     }
 
@@ -209,9 +195,9 @@ mod tests {
         let override_counter: Key = "counter_override.foo".into();
         let all_override: Key = "all_override.foo".into();
 
-        let mut default_mock = MockTestRecorder::new();
-        let mut counter_mock = MockTestRecorder::new();
-        let mut all_mock = MockTestRecorder::new();
+        let mut default_mock = MockBasicRecorder::new();
+        let mut counter_mock = MockBasicRecorder::new();
+        let mut all_mock = MockBasicRecorder::new();
 
         let mut seq = Sequence::new();
 

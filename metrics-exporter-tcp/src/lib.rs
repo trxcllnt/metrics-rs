@@ -63,7 +63,7 @@ use bytes::Bytes;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use metrics::{
     Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Recorder,
-    SetRecorderError, SharedString, Unit,
+    SetRecorderError, Attribute, attributes::Description,
 };
 use mio::{
     net::{TcpListener, TcpStream},
@@ -93,7 +93,7 @@ enum MetricOperation {
 }
 
 enum Event {
-    Metadata(KeyName, MetricType, Option<Unit>, SharedString),
+    Attribute(KeyName, MetricType, Box<dyn Attribute>),
     Metric(Key, MetricOperation),
 }
 
@@ -165,14 +165,13 @@ impl State {
         }
     }
 
-    fn register_metric(
+    fn set_metric_attribute(
         &self,
         key_name: KeyName,
         metric_type: MetricType,
-        unit: Option<Unit>,
-        description: SharedString,
+        attribute: Box<dyn Attribute>,
     ) {
-        let _ = self.tx.try_send(Event::Metadata(key_name, metric_type, unit, description));
+        let _ = self.tx.try_send(Event::Attribute(key_name, metric_type, attribute));
         self.wake();
     }
 
@@ -321,16 +320,16 @@ impl Default for TcpBuilder {
 }
 
 impl Recorder for TcpRecorder {
-    fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        self.state.register_metric(key_name, MetricType::Counter, unit, description);
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>)  {
+        self.state.set_metric_attribute(key, MetricType::Counter, attribute);
     }
 
-    fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        self.state.register_metric(key_name, MetricType::Gauge, unit, description);
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>)  {
+        self.state.set_metric_attribute(key, MetricType::Gauge, attribute);
     }
 
-    fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        self.state.register_metric(key_name, MetricType::Histogram, unit, description);
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>)  {
+        self.state.set_metric_attribute(key, MetricType::Histogram, attribute);
     }
 
     fn register_counter(&self, key: &Key) -> Counter {
@@ -403,13 +402,12 @@ fn run_transport(
                         };
 
                         match msg {
-                            Event::Metadata(key, metric_type, unit, desc) => {
+                            Event::Attribute(key, metric_type, attribute) => {
                                 let entry = metadata
                                     .entry(key)
-                                    .or_insert_with(|| (metric_type, None, None));
-                                let (_, uentry, dentry) = entry;
-                                *uentry = unit;
-                                *dentry = Some(desc);
+                                    .or_insert_with(|| (metric_type, Vec::new()));
+                                let (_, attributes) = entry;
+                                attributes.push(attribute);
                             }
                             Event::Metric(key, value) => {
                                 match convert_metric_to_protobuf_encoded(key, value) {
@@ -519,16 +517,33 @@ fn run_transport(
 
 #[allow(clippy::mutable_key_type)]
 fn generate_metadata_messages(
-    metadata: &HashMap<KeyName, (MetricType, Option<Unit>, Option<SharedString>)>,
+    metadata: &HashMap<KeyName, (MetricType, Vec<Box<dyn Attribute>>)>,
 ) -> VecDeque<Bytes> {
     let mut bufs = VecDeque::new();
-    for (key_name, (metric_type, unit, desc)) in metadata.iter() {
+    for (key_name, (metric_type, attributes)) in metadata.iter() {
+        let unit = try_extract_unit(attributes);
+        let desc = try_extract_description(attributes);
         let msg =
-            convert_metadata_to_protobuf_encoded(key_name, *metric_type, *unit, desc.as_ref())
+            convert_metadata_to_protobuf_encoded(key_name, *metric_type, unit, desc)
                 .expect("failed to encode metadata buffer");
         bufs.push_back(msg);
     }
     bufs
+}
+
+fn try_extract_unit(_attributes: &[Box<dyn Attribute>]) -> Option<String> {
+    // TODO: Implement this once there's some reasonably canonical unit attribute impl.
+    None
+}
+
+fn try_extract_description(attributes: &[Box<dyn Attribute>]) -> Option<String> {
+    for attribute in attributes {
+        if let Some(desc) = attribute.downcast_ref::<Description>() {
+            return Some(desc.to_string())
+        }
+    }
+
+    None
 }
 
 #[tracing::instrument(skip(wbuf, msgs))]
@@ -580,15 +595,15 @@ fn drive_connection(
 fn convert_metadata_to_protobuf_encoded(
     key_name: &KeyName,
     metric_type: MetricType,
-    unit: Option<Unit>,
-    desc: Option<&SharedString>,
+    unit: Option<String>,
+    desc: Option<String>,
 ) -> Result<Bytes, EncodeError> {
     let name = key_name.as_str().to_string();
     let metadata = proto::Metadata {
         name,
         metric_type: metric_type.into(),
-        unit: unit.map(|u| proto::metadata::Unit::UnitValue(u.as_str().to_owned())),
-        description: desc.map(|d| proto::metadata::Description::DescriptionValue(d.to_string())),
+        unit: unit.map(proto::metadata::Unit::UnitValue),
+        description: desc.map(proto::metadata::Description::DescriptionValue),
     };
     let event = proto::Event { event: Some(proto::event::Event::Metadata(metadata)) };
 

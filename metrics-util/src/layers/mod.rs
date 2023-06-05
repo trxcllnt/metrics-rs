@@ -111,7 +111,7 @@
 //!     .expect("failed to install stack");
 //! # }
 //! ```
-use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit};
+use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, Attribute};
 
 use metrics::SetRecorderError;
 
@@ -167,16 +167,16 @@ impl<R: Recorder + 'static> Stack<R> {
 }
 
 impl<R: Recorder> Recorder for Stack<R> {
-    fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        self.inner.describe_counter(key_name, unit, description);
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        self.inner.set_counter_attribute(key, attribute);
     }
 
-    fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        self.inner.describe_gauge(key_name, unit, description);
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        self.inner.set_gauge_attribute(key, attribute);
     }
 
-    fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        self.inner.describe_histogram(key_name, unit, description);
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        self.inner.set_histogram_attribute(key, attribute);
     }
 
     fn register_counter(&self, key: &Key) -> Counter {

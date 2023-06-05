@@ -260,6 +260,9 @@
 
 pub mod atomics;
 
+pub mod attributes;
+pub use self::attributes::Attribute;
+
 mod common;
 pub use self::common::*;
 
@@ -309,7 +312,7 @@ pub use self::recorder::*;
 /// describe_counter!(format!("{}_via_format", "name"), "my favorite counter");
 /// # }
 /// ```
-pub use metrics_macros::describe_counter;
+pub use metrics_macros::set_counter_attribute;
 
 /// Describes a gauge.
 ///
@@ -343,7 +346,7 @@ pub use metrics_macros::describe_counter;
 /// describe_gauge!(format!("{}_via_format", "name"), "my favorite gauge");
 /// # }
 /// ```
-pub use metrics_macros::describe_gauge;
+pub use metrics_macros::set_gauge_attribute;
 
 /// Describes a histogram.
 ///
@@ -377,7 +380,7 @@ pub use metrics_macros::describe_gauge;
 /// describe_histogram!(format!("{}_via_format", "name"), "my favorite histogram");
 /// # }
 /// ```
-pub use metrics_macros::describe_histogram;
+pub use metrics_macros::set_histogram_attribute;
 
 /// Registers a counter.
 ///

@@ -106,8 +106,6 @@ fn test_basic_functionality() {
                 MetricKind::Counter,
                 Key::from_static_parts(LOGIN_ATTEMPTS, SVC_USER_EMAIL)
             ),
-            None,
-            None,
             DebugValue::Counter(1),
         )]
     )
@@ -143,8 +141,6 @@ fn test_macro_forms() {
                     MetricKind::Counter,
                     Key::from_static_parts(LOGIN_ATTEMPTS_NONE, USER_EMAIL)
                 ),
-                None,
-                None,
                 DebugValue::Counter(1),
             ),
             (
@@ -152,8 +148,6 @@ fn test_macro_forms() {
                     MetricKind::Counter,
                     Key::from_static_parts(LOGIN_ATTEMPTS_STATIC, SVC_USER_EMAIL),
                 ),
-                None,
-                None,
                 DebugValue::Counter(1),
             ),
             (
@@ -161,8 +155,6 @@ fn test_macro_forms() {
                     MetricKind::Counter,
                     Key::from_static_parts(LOGIN_ATTEMPTS_DYNAMIC, NODE_USER_EMAIL),
                 ),
-                None,
-                None,
                 DebugValue::Counter(1),
             ),
             (
@@ -170,8 +162,6 @@ fn test_macro_forms() {
                     MetricKind::Counter,
                     Key::from_static_parts(LOGIN_ATTEMPTS_BOTH, SVC_NODE_USER_EMAIL),
                 ),
-                None,
-                None,
                 DebugValue::Counter(1),
             ),
         ]
@@ -193,8 +183,6 @@ fn test_no_labels() {
         snapshot,
         vec![(
             CompositeKey::new(MetricKind::Counter, Key::from_static_name(LOGIN_ATTEMPTS)),
-            None,
-            None,
             DebugValue::Counter(1),
         )]
     )
@@ -247,8 +235,6 @@ fn test_multiple_paths_to_the_same_callsite() {
                     MetricKind::Counter,
                     Key::from_static_parts(MY_COUNTER, SAME_CALLSITE_PATH_1),
                 ),
-                None,
-                None,
                 DebugValue::Counter(1),
             ),
             (
@@ -256,8 +242,6 @@ fn test_multiple_paths_to_the_same_callsite() {
                     MetricKind::Counter,
                     Key::from_static_parts(MY_COUNTER, SAME_CALLSITE_PATH_2),
                 ),
-                None,
-                None,
                 DebugValue::Counter(1),
             )
         ]
@@ -306,8 +290,6 @@ fn test_nested_spans() {
                 MetricKind::Counter,
                 Key::from_static_parts(MY_COUNTER, COMBINED_LABELS)
             ),
-            None,
-            None,
             DebugValue::Counter(1),
         )]
     );
@@ -342,8 +324,6 @@ fn test_label_filtering() {
                 MetricKind::Counter,
                 Key::from_static_parts(LOGIN_ATTEMPTS, EMAIL_USER)
             ),
-            None,
-            None,
             DebugValue::Counter(1),
         )]
     )
@@ -373,8 +353,6 @@ fn test_label_allowlist() {
         snapshot,
         vec![(
             CompositeKey::new(MetricKind::Counter, Key::from_static_parts(LOGIN_ATTEMPTS, SVC_ENV)),
-            None,
-            None,
             DebugValue::Counter(1),
         )]
     )

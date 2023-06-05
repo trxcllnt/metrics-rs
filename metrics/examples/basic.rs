@@ -8,11 +8,12 @@
 use std::sync::Arc;
 
 use metrics::{
-    absolute_counter, counter, decrement_gauge, describe_counter, describe_gauge,
-    describe_histogram, gauge, histogram, increment_counter, increment_gauge, register_counter,
-    register_gauge, register_histogram, KeyName, SharedString,
+    attributes::Description,
+    absolute_counter, counter, decrement_gauge, set_counter_attribute, set_gauge_attribute,
+    set_histogram_attribute, gauge, histogram, increment_counter, increment_gauge, register_counter,
+    register_gauge, register_histogram, KeyName, Attribute,
 };
-use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, Recorder, Unit};
+use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, Recorder};
 
 struct PrintHandle(Key);
 
@@ -50,30 +51,27 @@ impl HistogramFn for PrintHandle {
 struct PrintRecorder;
 
 impl Recorder for PrintRecorder {
-    fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
         println!(
-            "(counter) registered key {} with unit {:?} and description {:?}",
-            key_name.as_str(),
-            unit,
-            description
+            "(counter) registered key {} with attribute: {:?}",
+            key.as_str(),
+            attribute
         );
     }
 
-    fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
         println!(
-            "(gauge) registered key {} with unit {:?} and description {:?}",
-            key_name.as_str(),
-            unit,
-            description
+            "(gauge) registered key {} with attribute: {:?}",
+            key.as_str(),
+            attribute
         );
     }
 
-    fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
         println!(
-            "(histogram) registered key {} with unit {:?} and description {:?}",
-            key_name.as_str(),
-            unit,
-            description
+            "(histogram) registered key {} with attribute: {:?}",
+            key.as_str(),
+            attribute
         );
     }
 
@@ -103,19 +101,17 @@ fn main() {
     let common_labels = &[("listener", "frontend")];
 
     // Go through describing the metrics:
-    describe_counter!("requests_processed", "number of requests processed");
-    describe_counter!("bytes_sent", Unit::Bytes, "total number of bytes sent");
-    describe_gauge!("connection_count", "current number of client connections");
-    describe_histogram!(
+    set_counter_attribute!("requests_processed", Description::from("number of requests processed"));
+    set_counter_attribute!("bytes_sent", Description::from("total number of bytes sent"));
+    set_gauge_attribute!("connection_count", Description::from("current number of client connections"));
+    set_histogram_attribute!(
         "svc.execution_time",
-        Unit::Milliseconds,
-        "execution time of request handler"
+        Description::from("execution time of request handler")
     );
-    describe_gauge!("unused_gauge", "some gauge we'll never use in this program");
-    describe_histogram!(
+    set_gauge_attribute!("unused_gauge", Description::from("some gauge we'll never use in this program"));
+    set_histogram_attribute!(
         "unused_histogram",
-        Unit::Seconds,
-        "some histogram we'll also never use in this program"
+        Description::from("some histogram we'll also never use in this program")
     );
 
     // And registering them:

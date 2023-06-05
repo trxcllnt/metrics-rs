@@ -1,15 +1,15 @@
-use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit};
+use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, Attribute};
 use mockall::{
     mock,
-    predicate::{self, eq},
+    predicate::{self, eq, function},
     Predicate,
 };
 
 #[derive(Clone)]
 pub enum RecorderOperation {
-    DescribeCounter(KeyName, Option<Unit>, SharedString),
-    DescribeGauge(KeyName, Option<Unit>, SharedString),
-    DescribeHistogram(KeyName, Option<Unit>, SharedString),
+    SetCounterAttribute(KeyName, Box<dyn Attribute>),
+    SetGaugeAttribute(KeyName, Box<dyn Attribute>),
+    SetHistogramAttribute(KeyName, Box<dyn Attribute>),
     RegisterCounter(Key, Counter),
     RegisterGauge(Key, Gauge),
     RegisterHistogram(Key, Histogram),
@@ -18,14 +18,14 @@ pub enum RecorderOperation {
 impl RecorderOperation {
     fn apply_to_mock(self, mock: &mut MockBasicRecorder) {
         match self {
-            RecorderOperation::DescribeCounter(key_name, unit, desc) => {
-                expect_describe_counter(mock, key_name, unit, desc)
+            RecorderOperation::SetCounterAttribute(key, attribute) => {
+                expect_set_counter_attribute(mock, key, attribute)
             }
-            RecorderOperation::DescribeGauge(key_name, unit, desc) => {
-                expect_describe_gauge(mock, key_name, unit, desc)
+            RecorderOperation::SetGaugeAttribute(key, attribute) => {
+                expect_set_gauge_attribute(mock, key, attribute)
             }
-            RecorderOperation::DescribeHistogram(key_name, unit, desc) => {
-                expect_describe_histogram(mock, key_name, unit, desc)
+            RecorderOperation::SetHistogramAttribute(key, attribute) => {
+                expect_set_histogram_attribute(mock, key, attribute)
             }
             RecorderOperation::RegisterCounter(key, counter) => {
                 expect_register_counter(mock, key, counter)
@@ -42,14 +42,14 @@ impl RecorderOperation {
         R: Recorder,
     {
         match self {
-            RecorderOperation::DescribeCounter(key_name, unit, desc) => {
-                recorder.describe_counter(key_name, unit, desc);
+            RecorderOperation::SetCounterAttribute(key, attribute) => {
+                recorder.set_counter_attribute(key, attribute);
             }
-            RecorderOperation::DescribeGauge(key_name, unit, desc) => {
-                recorder.describe_gauge(key_name, unit, desc);
+            RecorderOperation::SetGaugeAttribute(key, attribute) => {
+                recorder.set_gauge_attribute(key, attribute);
             }
-            RecorderOperation::DescribeHistogram(key_name, unit, desc) => {
-                recorder.describe_histogram(key_name, unit, desc);
+            RecorderOperation::SetHistogramAttribute(key, attribute) => {
+                recorder.set_histogram_attribute(key, attribute);
             }
             RecorderOperation::RegisterCounter(key, _) => {
                 let _ = recorder.register_counter(&key);
@@ -68,9 +68,9 @@ mock! {
     pub BasicRecorder {}
 
     impl Recorder for BasicRecorder {
-        fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString);
-        fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString);
-        fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString);
+        fn set_counter_attribute(&self, _key: KeyName, attribute: Box<dyn Attribute>);
+        fn set_gauge_attribute(&self, _key: KeyName, attribute: Box<dyn Attribute>);
+        fn set_histogram_attribute(&self, _key: KeyName, attribute: Box<dyn Attribute>);
         fn register_counter(&self, key: &Key) -> Counter;
         fn register_gauge(&self, key: &Key) -> Gauge;
         fn register_histogram(&self, key: &Key) -> Histogram;
@@ -90,39 +90,36 @@ impl MockBasicRecorder {
     }
 }
 
-pub fn expect_describe_counter(
+pub fn expect_set_counter_attribute(
     mock: &mut MockBasicRecorder,
-    key_name: KeyName,
-    unit: Option<Unit>,
-    description: SharedString,
+    key: KeyName,
+    attribute: Box<dyn Attribute>,
 ) {
-    mock.expect_describe_counter()
+    mock.expect_set_counter_attribute()
         .times(1)
-        .with(eq(key_name), eq(unit), eq(description))
+        .with(eq(key), function(move |attr: &Box<dyn Attribute>| attribute.type_id() == attr.type_id()))
         .return_const(());
 }
 
-pub fn expect_describe_gauge(
+pub fn expect_set_gauge_attribute(
     mock: &mut MockBasicRecorder,
-    key_name: KeyName,
-    unit: Option<Unit>,
-    description: SharedString,
+    key: KeyName,
+    attribute: Box<dyn Attribute>,
 ) {
-    mock.expect_describe_gauge()
+    mock.expect_set_gauge_attribute()
         .times(1)
-        .with(eq(key_name), eq(unit), eq(description))
+        .with(eq(key), function(move |attr: &Box<dyn Attribute>| attribute.type_id() == attr.type_id()))
         .return_const(());
 }
 
-pub fn expect_describe_histogram(
+pub fn expect_set_histogram_attribute(
     mock: &mut MockBasicRecorder,
-    key_name: KeyName,
-    unit: Option<Unit>,
-    description: SharedString,
+    key: KeyName,
+    attribute: Box<dyn Attribute>,
 ) {
-    mock.expect_describe_histogram()
+    mock.expect_set_histogram_attribute()
         .times(1)
-        .with(eq(key_name), eq(unit), eq(description))
+        .with(eq(key), function(move |attr: &Box<dyn Attribute>| attribute.type_id() == attr.type_id()))
         .return_const(());
 }
 

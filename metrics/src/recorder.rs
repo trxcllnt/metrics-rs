@@ -1,7 +1,7 @@
 use std::fmt;
 
 use self::cell::RecorderOnceCell;
-use crate::{Counter, Gauge, Histogram, Key, KeyName, SharedString, Unit};
+use crate::{Attribute, Counter, Gauge, Histogram, Key, KeyName};
 
 mod cell {
     use super::{Recorder, SetRecorderError};
@@ -116,29 +116,14 @@ static SET_RECORDER_ERROR: &str =
 /// This is the core trait that allows interoperability between exporter implementations and the
 /// macros provided by `metrics`.
 pub trait Recorder {
-    /// Describes a counter.
-    ///
-    /// Callers may provide the unit or a description of the counter being registered. Whether or
-    /// not a metric can be reregistered to provide a unit/description, if one was already passed
-    /// or not, as well as how units/descriptions are used by the underlying recorder, is an
-    /// implementation detail.
-    fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: SharedString);
+    /// Sets a counter attribute.
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>);
 
-    /// Describes a gauge.
-    ///
-    /// Callers may provide the unit or a description of the gauge being registered. Whether or
-    /// not a metric can be reregistered to provide a unit/description, if one was already passed
-    /// or not, as well as how units/descriptions are used by the underlying recorder, is an
-    /// implementation detail.
-    fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: SharedString);
+    /// Sets a gauge attribute.
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>);
 
-    /// Describes a histogram.
-    ///
-    /// Callers may provide the unit or a description of the histogram being registered. Whether or
-    /// not a metric can be reregistered to provide a unit/description, if one was already passed
-    /// or not, as well as how units/descriptions are used by the underlying recorder, is an
-    /// implementation detail.
-    fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: SharedString);
+    /// Sets a histogram attribute.
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>);
 
     /// Registers a counter.
     fn register_counter(&self, key: &Key) -> Counter;
@@ -157,9 +142,9 @@ pub trait Recorder {
 pub struct NoopRecorder;
 
 impl Recorder for NoopRecorder {
-    fn describe_counter(&self, _key: KeyName, _unit: Option<Unit>, _description: SharedString) {}
-    fn describe_gauge(&self, _key: KeyName, _unit: Option<Unit>, _description: SharedString) {}
-    fn describe_histogram(&self, _key: KeyName, _unit: Option<Unit>, _description: SharedString) {}
+    fn set_counter_attribute(&self, _key: KeyName, _attribute: Box<dyn Attribute>) {}
+    fn set_gauge_attribute(&self, _key: KeyName, _attribute: Box<dyn Attribute>) {}
+    fn set_histogram_attribute(&self, _key: KeyName, _attribute: Box<dyn Attribute>) {}
     fn register_counter(&self, _key: &Key) -> Counter {
         Counter::noop()
     }

@@ -26,6 +26,7 @@ name = "macros"
 harness = false
 
 [dependencies]
+dyn-clone = { version = "1", default-features = false }
 metrics-macros = { version = "^0.7", path = "../metrics-macros" }
 ahash = { version = "0.8", default-features = false }
 

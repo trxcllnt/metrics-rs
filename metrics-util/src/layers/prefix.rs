@@ -1,5 +1,5 @@
 use crate::layers::Layer;
-use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit};
+use metrics::{Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Attribute};
 
 /// Applies a prefix to every metric key.
 ///
@@ -30,19 +30,19 @@ impl<R> Prefix<R> {
 }
 
 impl<R: Recorder> Recorder for Prefix<R> {
-    fn describe_counter(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        let new_key_name = self.prefix_key_name(key_name);
-        self.inner.describe_counter(new_key_name, unit, description)
+    fn set_counter_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        let new_key = self.prefix_key_name(key);
+        self.inner.set_counter_attribute(new_key, attribute)
     }
 
-    fn describe_gauge(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        let new_key_name = self.prefix_key_name(key_name);
-        self.inner.describe_gauge(new_key_name, unit, description)
+    fn set_gauge_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        let new_key = self.prefix_key_name(key);
+        self.inner.set_gauge_attribute(new_key, attribute)
     }
 
-    fn describe_histogram(&self, key_name: KeyName, unit: Option<Unit>, description: SharedString) {
-        let new_key_name = self.prefix_key_name(key_name);
-        self.inner.describe_histogram(new_key_name, unit, description)
+    fn set_histogram_attribute(&self, key: KeyName, attribute: Box<dyn Attribute>) {
+        let new_key = self.prefix_key_name(key);
+        self.inner.set_histogram_attribute(new_key, attribute)
     }
 
     fn register_counter(&self, key: &Key) -> Counter {
@@ -86,25 +86,22 @@ mod tests {
     use super::{Prefix, PrefixLayer};
     use crate::layers::Layer;
     use crate::test_util::*;
-    use metrics::{Counter, Gauge, Histogram, Key, KeyName, Unit};
+    use metrics::{Counter, Gauge, Histogram, Key, KeyName, attributes::Description};
 
     #[test]
     fn test_basic_functionality() {
         let inputs = vec![
-            RecorderOperation::DescribeCounter(
+            RecorderOperation::SetCounterAttribute(
                 "counter_key".into(),
-                Some(Unit::Count),
-                "counter desc".into(),
+                Box::new(Description::from("counter desc")),
             ),
-            RecorderOperation::DescribeGauge(
+            RecorderOperation::SetGaugeAttribute(
                 "gauge_key".into(),
-                Some(Unit::Bytes),
-                "gauge desc".into(),
+                Box::new(Description::from("gauge desc")),
             ),
-            RecorderOperation::DescribeHistogram(
+            RecorderOperation::SetHistogramAttribute(
                 "histogram_key".into(),
-                Some(Unit::Nanoseconds),
-                "histogram desc".into(),
+                Box::new(Description::from("histogram desc")),
             ),
             RecorderOperation::RegisterCounter("counter_key".into(), Counter::noop()),
             RecorderOperation::RegisterGauge("gauge_key".into(), Gauge::noop()),
@@ -112,20 +109,17 @@ mod tests {
         ];
 
         let expectations = vec![
-            RecorderOperation::DescribeCounter(
+            RecorderOperation::SetCounterAttribute(
                 "testing.counter_key".into(),
-                Some(Unit::Count),
-                "counter desc".into(),
+                Box::new(Description::from("counter desc")),
             ),
-            RecorderOperation::DescribeGauge(
+            RecorderOperation::SetGaugeAttribute(
                 "testing.gauge_key".into(),
-                Some(Unit::Bytes),
-                "gauge desc".into(),
+                Box::new(Description::from("gauge desc")),
             ),
-            RecorderOperation::DescribeHistogram(
+            RecorderOperation::SetHistogramAttribute(
                 "testing.histogram_key".into(),
-                Some(Unit::Nanoseconds),
-                "histogram desc".into(),
+                Box::new(Description::from("histogram desc")),
             ),
             RecorderOperation::RegisterCounter("testing.counter_key".into(), Counter::noop()),
             RecorderOperation::RegisterGauge("testing.gauge_key".into(), Gauge::noop()),

@@ -1,171 +1,20 @@
 use syn::parse_quote;
-use syn::{Expr, ExprPath};
+use syn::Expr;
 
 use super::*;
 
 #[test]
-fn test_get_describe_code() {
-    // Basic registration.
-    let stream = get_describe_code(
+fn test_get_attribute_code() {
+    let stream = get_attribute_code(
         "mytype",
         parse_quote! { "mykeyname" },
-        None,
-        parse_quote! { "a counter" },
+        parse_quote! { Description::from("metric description") },
     );
 
     let expected = concat!(
         "{ ",
         "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (\"mykeyname\" . into () , None , \"a counter\" . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_qualified_unit_rooted() {
-    // Now with unit.
-    let units: ExprPath = parse_quote! { ::metrics::Unit::Nanoseconds };
-    let stream = get_describe_code(
-        "mytype",
-        parse_quote! { "mykeyname" },
-        Some(Expr::Path(units)),
-        parse_quote! { "a counter" },
-    );
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (\"mykeyname\" . into () , Some (:: metrics :: Unit :: Nanoseconds) , \"a counter\" . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_qualified_unit() {
-    // Now with unit.
-    let units: ExprPath = parse_quote! { metrics::Unit::Nanoseconds };
-    let stream = get_describe_code(
-        "mytype",
-        parse_quote! { "mykeyname" },
-        Some(Expr::Path(units)),
-        parse_quote! { "a counter" },
-    );
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (\"mykeyname\" . into () , Some (metrics :: Unit :: Nanoseconds) , \"a counter\" . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_relative_unit() {
-    // Now with unit.
-    let units: ExprPath = parse_quote! { Unit::Nanoseconds };
-    let stream = get_describe_code(
-        "mytype",
-        parse_quote! { "mykeyname" },
-        Some(Expr::Path(units)),
-        parse_quote! { "a counter" },
-    );
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (\"mykeyname\" . into () , Some (Unit :: Nanoseconds) , \"a counter\" . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_constants() {
-    // Basic registration.
-    let stream =
-        get_describe_code("mytype", parse_quote! { KEY_NAME }, None, parse_quote! { COUNTER_DESC });
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (KEY_NAME . into () , None , COUNTER_DESC . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_constants_and_with_qualified_unit() {
-    // Now with unit.
-    let units: ExprPath = parse_quote! { metrics::Unit::Nanoseconds };
-    let stream = get_describe_code(
-        "mytype",
-        parse_quote! { KEY_NAME },
-        Some(Expr::Path(units)),
-        parse_quote! { COUNTER_DESC },
-    );
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (KEY_NAME . into () , Some (metrics :: Unit :: Nanoseconds) , COUNTER_DESC . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_constants_and_with_qualified_unit_rooted() {
-    // Now with unit.
-    let units: ExprPath = parse_quote! { ::metrics::Unit::Nanoseconds };
-    let stream = get_describe_code(
-        "mytype",
-        parse_quote! { KEY_NAME },
-        Some(Expr::Path(units)),
-        parse_quote! { COUNTER_DESC },
-    );
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (KEY_NAME . into () , Some (:: metrics :: Unit :: Nanoseconds) , COUNTER_DESC . into ()) ; ",
-        "} ",
-        "}",
-    );
-
-    assert_eq!(stream.to_string(), expected);
-}
-
-#[test]
-fn test_get_describe_code_with_constants_and_with_relative_unit() {
-    // Now with unit.
-    let units: ExprPath = parse_quote! { Unit::Nanoseconds };
-    let stream = get_describe_code(
-        "mytype",
-        parse_quote! { KEY_NAME },
-        Some(Expr::Path(units)),
-        parse_quote! { COUNTER_DESC },
-    );
-
-    let expected = concat!(
-        "{ ",
-        "if let Some (recorder) = :: metrics :: try_recorder () { ",
-        "recorder . describe_mytype (KEY_NAME . into () , Some (Unit :: Nanoseconds) , COUNTER_DESC . into ()) ; ",
+        "recorder . set_mytype_attribute (\"mykeyname\" . into () , Description :: from (\"metric description\") . into ()) ; ",
         "} ",
         "}",
     );

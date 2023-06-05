@@ -4,7 +4,6 @@ use std::time::Duration;
 use std::{error::Error, io};
 
 use chrono::Local;
-use metrics::Unit;
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::IntoAlternateScreen};
 use tui::{
     backend::TermionBackend,

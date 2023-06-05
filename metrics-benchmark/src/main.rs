@@ -3,7 +3,7 @@ use hdrhistogram::Histogram as HdrHistogram;
 use log::{error, info};
 use metrics::{
     gauge, histogram, increment_counter, register_counter, register_gauge, register_histogram,
-    Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString, Unit,
+    Counter, Gauge, Histogram, Key, KeyName, Recorder, SharedString,
 };
 use metrics_util::registry::{AtomicStorage, Registry};
 use portable_atomic::AtomicU64;

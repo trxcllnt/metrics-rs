@@ -4,9 +4,10 @@ use self::proc_macro::TokenStream;
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
-use syn::parse::{Error, Parse, ParseStream, Result};
-use syn::{parse::discouraged::Speculative, Lit};
-use syn::{parse_macro_input, Expr, Token};
+use syn::{
+    parse::{Error, Parse, ParseStream, Result},
+    parse_macro_input, Expr, Lit, Token,
+};
 
 #[cfg(test)]
 mod tests;
@@ -27,10 +28,9 @@ struct WithExpression {
     labels: Option<Labels>,
 }
 
-struct Description {
+struct Attribute {
     key: Expr,
-    unit: Option<Expr>,
-    description: Expr,
+    attribute: Expr,
 }
 
 impl Parse for WithoutExpression {
@@ -38,7 +38,7 @@ impl Parse for WithoutExpression {
         let key = input.parse::<Expr>()?;
         let labels = parse_labels(&mut input)?;
 
-        Ok(WithoutExpression { key, labels })
+        Ok(Self { key, labels })
     }
 }
 
@@ -51,82 +51,39 @@ impl Parse for WithExpression {
 
         let labels = parse_labels(&mut input)?;
 
-        Ok(WithExpression { key, op_value, labels })
+        Ok(Self { key, op_value, labels })
     }
 }
 
-impl Parse for Description {
+impl Parse for Attribute {
     fn parse(input: ParseStream) -> Result<Self> {
         let key = input.parse::<Expr>()?;
-
-        // We accept two possible parameters: unit, and description.
-        //
-        // There is only one specific requirement that must be met, and that is that the || _must_
-        // have a qualified path of either `metrics::Unit::...` or `Unit::..` for us to properly
-        // distinguish it amongst the macro parameters.
-
-        // Now try to read out the components.  We speculatively try to parse out a unit if it
-        // exists, and otherwise we just look for the description.
-        let unit = input
-            .call(|s| {
-                let forked = s.fork();
-                forked.parse::<Token![,]>()?;
-
-                let output = if let Ok(Expr::Path(path)) = forked.parse::<Expr>() {
-                    let qname = path
-                        .path
-                        .segments
-                        .iter()
-                        .map(|x| x.ident.to_string())
-                        .collect::<Vec<_>>()
-                        .join("::");
-                    if qname.starts_with("::metrics::Unit")
-                        || qname.starts_with("metrics::Unit")
-                        || qname.starts_with("Unit")
-                    {
-                        Some(Expr::Path(path))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if output.is_some() {
-                    s.advance_to(&forked);
-                }
-
-                Ok(output)
-            })
-            .ok()
-            .flatten();
-
         input.parse::<Token![,]>()?;
-        let description = input.parse::<Expr>()?;
+        let attribute = input.parse::<Expr>()?;
 
-        Ok(Description { key, unit, description })
+        Ok(Self { key, attribute })
     }
 }
 
 #[proc_macro]
-pub fn describe_counter(input: TokenStream) -> TokenStream {
-    let Description { key, unit, description } = parse_macro_input!(input as Description);
+pub fn set_counter_attribute(input: TokenStream) -> TokenStream {
+    let Attribute { key, attribute } = parse_macro_input!(input as Attribute);
 
-    get_describe_code("counter", key, unit, description).into()
+    get_attribute_code("counter", key, attribute).into()
 }
 
 #[proc_macro]
-pub fn describe_gauge(input: TokenStream) -> TokenStream {
-    let Description { key, unit, description } = parse_macro_input!(input as Description);
+pub fn set_gauge_attribute(input: TokenStream) -> TokenStream {
+    let Attribute { key, attribute } = parse_macro_input!(input as Attribute);
 
-    get_describe_code("gauge", key, unit, description).into()
+    get_attribute_code("gauge", key, attribute).into()
 }
 
 #[proc_macro]
-pub fn describe_histogram(input: TokenStream) -> TokenStream {
-    let Description { key, unit, description } = parse_macro_input!(input as Description);
+pub fn set_histogram_attribute(input: TokenStream) -> TokenStream {
+    let Attribute { key, attribute } = parse_macro_input!(input as Attribute);
 
-    get_describe_code("histogram", key, unit, description).into()
+    get_attribute_code("histogram", key, attribute).into()
 }
 
 #[proc_macro]
@@ -201,24 +158,14 @@ pub fn histogram(input: TokenStream) -> TokenStream {
     get_register_and_op_code("histogram", key, labels, Some(("record", op_value))).into()
 }
 
-fn get_describe_code(
-    metric_type: &str,
-    name: Expr,
-    unit: Option<Expr>,
-    description: Expr,
-) -> TokenStream2 {
-    let describe_ident = format_ident!("describe_{}", metric_type);
-
-    let unit = match unit {
-        Some(e) => quote! { Some(#e) },
-        None => quote! { None },
-    };
+fn get_attribute_code(metric_type: &str, name: Expr, attribute: Expr) -> TokenStream2 {
+    let attribute_ident = format_ident!("set_{}_attribute", metric_type);
 
     quote! {
         {
             // Only do this work if there's a recorder installed.
             if let Some(recorder) = ::metrics::try_recorder() {
-                recorder.#describe_ident(#name.into(), #unit, #description.into());
+                recorder.#attribute_ident(#name.into(), ::std::boxed::Box::new(#attribute));
             }
         }
     }
