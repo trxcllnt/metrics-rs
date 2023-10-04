@@ -12,10 +12,6 @@ use std::{
 
 use crate::Label;
 
-// As `NonInlined`/`Inlined` are the same size, and share an overlap, the maximum amount of data we can store is the
-// size of two `usize`, minus one byte that we use for holding the length of the inlined string.
-const MAX_INLINE_DATA_LEN: usize = (2 * std::mem::size_of::<usize>()) - 1;
-
 #[derive(Clone, Copy)]
 enum Kind {
     Owned,
@@ -27,23 +23,26 @@ enum Kind {
 ///
 /// # Strings, strings everywhere
 ///
-/// In `metrics`, strings are arguably the most common data type used despite the fact that metrics are measuring
-/// numerical values. Both the name of a metric, and its labels, are strings: emitting a metric may involve
-/// one string, or 10 strings. Many of these strings tend to be used over and over during the life of the
-/// process, as well.
+/// In `metrics`, strings are arguably the most common data type used despite the fact that metrics
+/// are measuring numerical values. Both the name of a metric, and its labels, are strings: emitting
+/// a metric may involve one string, or 10 strings. Many of these strings tend to be used over and
+/// over during the life of the process, as well.
 ///
-/// In order to achieve and maintain a high level of performance, we use a "clone-on-write" smart pointer to handle
-/// passing these strings around. Doing so allows us to potentially avoid having to allocate entire copies of a string,
-/// instead using a lightweight smart pointer that can live on the stack.
+/// In order to achieve and maintain a high level of performance, we use a "clone-on-write" smart
+/// pointer to handle passing these strings around. Doing so allows us to potentially avoid having
+/// to allocate entire copies of a string, instead using a lightweight smart pointer that can live
+/// on the stack.
 ///
 /// # Why not `std::borrow::Cow`?
 ///
-/// The standard library already provides a clone-on-write smart pointer, `std::borrow::Cow`, which works well in many cases. However,
-/// `metrics` strives to provide minimal overhead where possible, and so `std::borrow::Cow` falls down in one particular
-/// way: it uses an enum representation which consumes an additional word of storage.
+/// The standard library already provides a clone-on-write smart pointer, `std::borrow::Cow`, which
+/// works well in many cases. However, `metrics` strives to provide minimal overhead where possible,
+/// and so `std::borrow::Cow` falls down in one particular way: it uses an enum representation which
+/// consumes an additional word of storage.
 ///
-/// As an example, let's look at strings. A string in `std::borrow::Cow` implies that `T` is `str`, and the owned
-/// version of `str` is simply `String`. Thus, for `std::borrow::Cow`, the in-memory layout looks like this:
+/// As an example, let's look at strings. A string in `std::borrow::Cow` implies that `T` is `str`,
+/// and the owned version of `str` is simply `String`. Thus, for `std::borrow::Cow`, the in-memory
+/// layout looks like this:
 ///
 /// ```text
 ///                                                                       Padding
@@ -57,14 +56,16 @@ enum Kind {
 ///                       +--------------+-------------+--------------+--------------+
 /// ```
 ///
-/// As you can see, you pay a memory size penalty when wrapping an owned string. This additional word adds minimal
-/// overhead, but we can easily avoid it with some clever logic around the values of the length and capacity fields.
+/// As you can see, you pay a memory size penalty when wrapping an owned string. This additional
+/// word adds minimal overhead, but we can easily avoid it with some clever logic around the values
+/// of the length and capacity fields.
 ///
-/// There is an existing crate that does just that: `beef`. Instead of using an enum, it is simply a struct that encodes
-/// the discriminant values in the length and capacity fields directly. If we're wrapping a borrowed value, we can infer
-/// that the "capacity" will always be zero, as we only need to track the capacity when we're wrapping an owned value,
-/// in order to be able to recreate the underlying storage when consuming the smart pointer, or dropping it. Instead of
-/// the above layout, `beef` looks like this:
+/// There is an existing crate that does just that: `beef`. Instead of using an enum, it is simply a
+/// struct that encodes the discriminant values in the length and capacity fields directly. If we're
+/// wrapping a borrowed value, we can infer that the "capacity" will always be zero, as we only need
+/// to track the capacity when we're wrapping an owned value, in order to be able to recreate the
+/// underlying storage when consuming the smart pointer, or dropping it. Instead of the above
+/// layout, `beef` looks like this:
 ///
 /// ```text
 ///                        +-------------+--------------+----------------+
@@ -77,36 +78,38 @@ enum Kind {
 ///
 /// # Why not `beef`?
 ///
-/// Up until this point, it might not be clear why we didn't just use `beef`. In truth, our design is fundamentally
-/// based on `beef`. Crucially, however, `beef` did not/still does not support `const` construction for generic slices.
-/// Remember how we mentioned labels? The labels of a metric `are `[Label]` under-the-hood, and so without a way to
-/// construct them in a `const` fashion, our previous work to allow entirely static keys would not be possible.
+/// Up until this point, it might not be clear why we didn't just use `beef`. In truth, our design
+/// is fundamentally based on `beef`. Crucially, however, `beef` did not/still does not support
+/// `const` construction for generic slices.  Remember how we mentioned labels? The labels of a
+/// metric `are `[Label]` under-the-hood, and so without a way to construct them in a `const`
+/// fashion, our previous work to allow entirely static keys would not be possible.
 ///
-/// Thus, we forked `beef` and copied into directly into `metrics` so that we could write a specialized `const`
-/// constructor for `[Label]`.
+/// Thus, we forked `beef` and copied into directly into `metrics` so that we could write a
+/// specialized `const` constructor for `[Label]`.
 ///
-/// This is why we have our own `Cow2` bundled into `metrics` directly, which is based on `beef`. In doing so, we can
-/// experiment with more interesting optimizations, and, as mentioned above, we can add const methods to support
-/// all of the types involved in statically building metrics keys.
+/// This is why we have our own `Cow2` bundled into `metrics` directly, which is based on `beef`. In
+/// doing so, we can experiment with more interesting optimizations, and, as mentioned above, we can
+/// add const methods to support all of the types involved in statically building metrics keys.
 ///
 /// # What we do that `beef` doesn't do
 ///
-/// It was already enough to use our own implementation for the specialized `const` capabilities, but we've taken things
-/// even further in two key ways: support for `Arc`-wrapped values, and inlined strings.
+/// It was already enough to use our own implementation for the specialized `const` capabilities,
+/// but we've taken things even further in a key way: support for `Arc`-wrapped values.
 ///
 /// ## `Arc`-wrapped values
 ///
-/// For many strings, there is still a desire to share them cheaply even when they are constructed at run-time.
-/// Remember, cloning a `Cow2` of an owned value means cloning the value itself, so we need another level of indirection
-/// to allow the cheap sharing, which is where `Arc<T>` comes in.
+/// For many strings, there is still a desire to share them cheaply even when they are constructed
+/// at run-time.  Remember, cloning a `Cow2` of an owned value means cloning the value itself, so we
+/// need another level of indirection to allow the cheap sharing, which is where `Arc<T>` comes in.
 ///
-/// Users can construct a `Arc<T>`, where `T` is lined up with the `T` of `metrics::Cow2`, and use that as the initial
-/// value instead. When `Cow2` is cloned, we instead cloning the underlying `Arc<T>`, avoiding a new allocation.
-/// `Arc<T>` still handles all of the normal logic necessary to know when the wrapped value must be dropped, and how
-/// many live references to the value that there are, and so on.
+/// Users can construct a `Arc<T>`, where `T` is lined up with the `T` of `metrics::Cow2`, and use
+/// that as the initial value instead. When `Cow2` is cloned, we instead cloning the underlying
+/// `Arc<T>`, avoiding a new allocation.  `Arc<T>` still handles all of the normal logic necessary
+/// to know when the wrapped value must be dropped, and how many live references to the value that
+/// there are, and so on.
 ///
-/// We handle this by relying on an invariant of `Vec<T>`: it never allocates more than `isize::MAX` [1]. This lets us
-/// derive the following truth table of the valid combinations of length/capacity:
+/// We handle this by relying on an invariant of `Vec<T>`: it never allocates more than `isize::MAX`
+/// [1]. This lets us derive the following truth table of the valid combinations of length/capacity:
 ///
 /// ```text
 ///                           Length         Capacity
@@ -119,122 +122,67 @@ enum Kind {
 ///                     +---------------+----------------+
 /// ```
 ///
-/// As we only implement `Cow2` for types where their owned variants are either explicitly or implicitly backed by
-/// `Vec<_>`, we know that our capacity will never be `usize::MAX`, as it is limited to `isize::MAX`, and thus we can
-/// safely encode our "shared" state within the capacity field.
-///
-/// ## Inlined strings
-///
-/// As `Cow2` is primarily meant for string data, we never want to leave an optimization on the table, and another trick
-/// we added is string inlining.
-///
-/// String inlining is based on the concept of reinterpreting the memory used for a type to use it for raw string
-/// storage in certain cases.
-///
-/// Fundamentally, `Cow2` has a specific size of three words, or three `usize` values: 24 bytes on a 64-bit platform,
-/// for example. Instead of looking at `Cow2` as three `usize`-sized fields, what if we looked at it as a single `[u8;
-/// 24]` field? We could then store the raw bytes of a string that was short enough directly in the memory for `Cow2`.
-/// This lets us avoid pointer chasing when getting a reference to the string through `Cow2`, and it lets us avoid
-/// having to make a new allocation when cloning an owned version of `Cow2`.
-///
-/// Unfortunately, we can't just blindly store a 24-byte string inside `Cow2`, as we need some of those bytes to act as
-/// our discriminant -- is this an inlined string or not? -- as well as to hold the length of the string, so we can
-/// properly reconstruct the fundamental `&[u8]` that backs the `str`. This means we're limited to inlining strings up
-/// to a length of `2*N-1`: our normal pointer field becomes optional (its discriminant is our now our
-/// inlined/non-inlined discriminant) which means we lose a word, but since there is no known platform that Rust
-/// supports where two words would be over 255 bytes total, we can use a single `u8` to safely hold our string length.
-///
-/// Practically, this means strings up to 15 bytes can be inlined on 64-bit platforms, while 32-bit platforms are
-/// limited to 7 bytes.
+/// As we only implement `Cow2` for types where their owned variants are either explicitly or
+/// implicitly backed by `Vec<_>`, we know that our capacity will never be `usize::MAX`, as it is
+/// limited to `isize::MAX`, and thus we can safely encode our "shared" state within the capacity
+/// field.
 ///
 /// # Notes
 ///
-/// [1] - technically, `Vec<T>` can have a capacity greater than `isize::MAX` when storing zero-sized types, but we
-/// don't do that here, so we always enforce that an owned version's capacity cannot be `usize::MAX` when constructing `Cow2`.
+/// [1] - technically, `Vec<T>` can have a capacity greater than `isize::MAX` when storing
+/// zero-sized types, but we don't do that here, so we always enforce that an owned version's
+/// capacity cannot be `usize::MAX` when constructing `Cow2`.
 pub struct Cow2<'a, T: Cow2able + ?Sized + 'a> {
     /// Pointer to data.
-    ptr: Option<NonNull<T::Pointer>>,
+    ptr: NonNull<T::Pointer>,
 
-    /// Inner state: either pointer metadata (non-inlined) or inlined data.
-    inner: Inner,
+    /// Pointer metadata.
+    metadata: Metadata,
 
     /// Lifetime marker.
     marker: PhantomData<&'a T>,
-}
-
-/// Smart pointer state.
-///
-/// Used to differentiate both whether or not the smart pointer is inlining a value, but also the specific data of each
-/// discriminant i.e. the data for an inlined value vs the length/capacity of a non-inlined value.
-#[derive(Clone, Copy)]
-pub union Inner {
-    non_inlined: NonInlined,
-    inlined: Inlined,
-}
-
-impl Inner {
-    const fn non_inlined(metadata: Metadata) -> Self {
-        Self { non_inlined: NonInlined(metadata) }
-    }
-
-    const fn inlined(length: u8, data: [u8; MAX_INLINE_DATA_LEN]) -> Self {
-        Self { inlined: Inlined { length, data } }
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-struct NonInlined(Metadata);
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Inlined {
-    /// Length of our inlined string.
-    length: u8,
-
-    /// String data.
-    data: [u8; MAX_INLINE_DATA_LEN],
 }
 
 impl<T> Cow2<'_, T>
 where
     T: Cow2able + ?Sized,
 {
-    fn non_inlined(ptr: NonNull<T::Pointer>, metadata: Metadata) -> Self {
-        Self { ptr: Some(ptr), inner: Inner::non_inlined(metadata), marker: PhantomData }
+    fn new(ptr: NonNull<T::Pointer>, metadata: Metadata) -> Self {
+        Self { ptr, metadata, marker: PhantomData }
     }
 
     /// Creates a smart pointer around an owned value.
     pub fn from_owned(owned: T::Owned) -> Self {
         let (ptr, metadata) = T::owned_into_parts(owned);
 
-        // This check is partially to guard against the semantics of `Vec<T>` changing in the future, and partially to
-        // ensure that we don't somehow implement `Cow2able` for a type where its owned version is backed by a vector of
-        // ZSTs, where the capacity could _legitimately_ be `usize::MAX`.
+        // This check is partially to guard against the semantics of `Vec<T>` changing in the
+        // future, and partially to ensure that we don't somehow implement `Cow2able` for a type
+        // where its owned version is backed by a vector of ZSTs, where the capacity could
+        // _legitimately_ be `usize::MAX`.
         if metadata.capacity() == usize::MAX {
             panic!("Invalid capacity of `usize::MAX` for owned value.");
         }
 
-        Self::non_inlined(ptr, metadata)
+        Self::new(ptr, metadata)
     }
 
     /// Creates a smart pointer around a shared value.
     pub fn from_shared(arc: Arc<T>) -> Self {
         let (ptr, metadata) = T::shared_into_parts(arc);
 
-        Self::non_inlined(ptr, metadata)
+        Self::new(ptr, metadata)
     }
 
     /// Extracts the owned data.
     ///
     /// Clones the data if it is not already owned.
     pub fn into_owned(self) -> <T as ToOwned>::Owned {
-        // We have to ensure that the `Drop` impl does _not_ run because we're taking ownership back in the case of
-        // holding an owned value. `owned_from_parts` handles any necessary dropping that must occur i.e. if we're holding
-        // an `Arc<T>`.
+        // We have to ensure that the `Drop` impl does _not_ run because we're taking ownership back
+        // in the case of holding an owned value. `owned_from_parts` handles any necessary dropping
+        // that must occur i.e. if we're holding an `Arc<T>`.
         let cow = ManuallyDrop::new(self);
 
-        T::owned_from_parts(cow.ptr, &cow.inner)
+        T::owned_from_parts(cow.ptr, &cow.metadata)
     }
 }
 
@@ -246,7 +194,7 @@ where
     pub fn from_borrowed(borrowed: &'a T) -> Self {
         let (ptr, metadata) = T::borrowed_into_parts(borrowed);
 
-        Self::non_inlined(ptr, metadata)
+        Self::new(ptr, metadata)
     }
 }
 
@@ -257,7 +205,7 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        let borrowed_ptr = T::borrowed_from_parts(self.ptr, &self.inner);
+        let borrowed_ptr = T::borrowed_from_parts(self.ptr, &self.metadata);
         unsafe { borrowed_ptr.as_ref().unwrap() }
     }
 }
@@ -267,8 +215,8 @@ where
     T: Cow2able + ?Sized,
 {
     fn clone(&self) -> Self {
-        let (ptr, inner) = T::clone_from_parts(self.ptr, &self.inner);
-        Self { ptr, inner, marker: PhantomData }
+        let (ptr, metadata) = T::clone_from_parts(self.ptr, &self.metadata);
+        Self { ptr, metadata, marker: PhantomData }
     }
 }
 
@@ -277,7 +225,7 @@ where
     T: Cow2able + ?Sized,
 {
     fn drop(&mut self) {
-        T::drop_from_parts(self.ptr, &self.inner);
+        T::drop_from_parts(self.ptr, &self.metadata);
     }
 }
 
@@ -428,23 +376,9 @@ impl<'a> Cow2<'a, str> {
         let ptr = unsafe { NonNull::new_unchecked(val.as_ptr() as *mut _) };
         let metadata = Metadata::borrowed(val.len());
 
-        Self { ptr: Some(ptr), inner: Inner::non_inlined(metadata), marker: PhantomData }
+        Self { ptr, metadata, marker: PhantomData }
     }
 }
-
-impl<'a> Cow2<'a, [Label]> {
-    pub const fn const_slice(val: &'a [Label]) -> Cow2<'a, [Label]> {
-        // SAFETY: We can never create a null pointer by casting a reference to a pointer.
-        let ptr = unsafe { NonNull::new_unchecked(val.as_ptr() as *mut _) };
-        let metadata = Metadata::borrowed(val.len());
-
-        Self { ptr: Some(ptr), inner: Inner::non_inlined(metadata), marker: PhantomData }
-    }
-}
-
-/*
-
-This will be possible in 1.61.0 when `const_fn_trait_bound` is stabilized.
 
 impl<'a, T> Cow2<'a, [T]>
 where
@@ -458,8 +392,6 @@ where
         }
     }
 }
-
-*/
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -486,8 +418,8 @@ impl Metadata {
     }
 
     #[inline]
-    const fn shared(length: usize) -> Metadata {
-        Metadata(length, usize::MAX)
+    const fn shared(len: usize) -> Metadata {
+        Metadata(len, usize::MAX)
     }
 
     #[inline]
@@ -508,16 +440,16 @@ pub trait Cow2able: ToOwned {
     fn owned_into_parts(owned: <Self as ToOwned>::Owned) -> (NonNull<Self::Pointer>, Metadata);
     fn shared_into_parts(arc: Arc<Self>) -> (NonNull<Self::Pointer>, Metadata);
 
-    fn borrowed_from_parts(ptr: Option<NonNull<Self::Pointer>>, inner: &Inner) -> *const Self;
+    fn borrowed_from_parts(ptr: NonNull<Self::Pointer>, metadata: &Metadata) -> *const Self;
     fn owned_from_parts(
-        ptr: Option<NonNull<Self::Pointer>>,
-        inner: &Inner,
+        ptr: NonNull<Self::Pointer>,
+        metadata: &Metadata,
     ) -> <Self as ToOwned>::Owned;
     fn clone_from_parts(
-        ptr: Option<NonNull<Self::Pointer>>,
-        inner: &Inner,
-    ) -> (Option<NonNull<Self::Pointer>>, Inner);
-    fn drop_from_parts(ptr: Option<NonNull<Self::Pointer>>, inner: &Inner);
+        ptr: NonNull<Self::Pointer>,
+        metadata: &Metadata,
+    ) -> (NonNull<Self::Pointer>, Metadata);
+    fn drop_from_parts(ptr: NonNull<Self::Pointer>, metadata: &Metadata);
 }
 
 impl Cow2able for str {
@@ -532,8 +464,8 @@ impl Cow2able for str {
 
     #[inline]
     fn owned_into_parts(owned: Self::Owned) -> (NonNull<Self::Pointer>, Metadata) {
-        // We need to go through `Vec<T>` here to get provenance for the entire allocation instead of just the
-        // initialized parts.
+        // We need to go through `Vec<T>` here to get provenance for the entire allocation instead
+        // of just the initialized parts.
         let mut owned = ManuallyDrop::new(owned.into_bytes());
         let ptr = unsafe { NonNull::new_unchecked(owned.as_mut_ptr()) };
         let metadata = Metadata::owned(owned.len(), owned.capacity());
@@ -548,151 +480,100 @@ impl Cow2able for str {
     }
 
     #[inline]
-    fn borrowed_from_parts(ptr: Option<NonNull<Self::Pointer>>, inner: &Inner) -> *const Self {
-        // When the pointer is `None`, we're inlining the string. Otherwise, it's not inlined.
-        match ptr {
-            None => {
-                let length = unsafe { inner.inlined.length };
-                let data = unsafe { &inner.inlined.data as *const _ };
-                slice_from_raw_parts(data, length as usize) as *const _
-            }
-            Some(ptr) => {
-                let metadata = unsafe { inner.non_inlined.0 };
-                slice_from_raw_parts(ptr.as_ptr(), metadata.length()) as *const _
-            }
-        }
+    fn borrowed_from_parts(ptr: NonNull<Self::Pointer>, metadata: &Metadata) -> *const Self {
+        slice_from_raw_parts(ptr.as_ptr(), metadata.length()) as *const _
     }
 
     #[inline]
     fn owned_from_parts(
-        ptr: Option<NonNull<Self::Pointer>>,
-        inner: &Inner,
+        ptr: NonNull<Self::Pointer>,
+        metadata: &Metadata,
     ) -> <Self as ToOwned>::Owned {
-        // When the pointer is `None`, we're inlining the string. Otherwise, it's not inlined.
-        match ptr {
-            None => {
-                // We copy the logic of getting an owned version of a borrowed string, which is just to get a valid
-                // `&str` and then call `to_string`.
-                let s = unsafe { &*Self::borrowed_from_parts(ptr, inner) };
+        match metadata.kind() {
+            // If we have a reference, well, then yeah, we need to clone to `String` via
+            // `to_string`. We own nothing so there's nothing to drop.
+            Kind::Borrowed => {
+                let s = unsafe { &*Self::borrowed_from_parts(ptr, metadata) };
                 s.to_string()
             }
 
-            Some(ptr) => {
-                let metadata = unsafe { inner.non_inlined.0 };
-                match metadata.kind() {
-                    // If we have a reference, well, then yeah, we need to clone to `String` via `to_string`. We own nothing so
-                    // there's nothing to drop.
-                    Kind::Borrowed => {
-                        let s = unsafe { &*Self::borrowed_from_parts(Some(ptr), inner) };
-                        s.to_string()
-                    }
+            // We're reconstituting the `String` directly from the backing storage, rather than
+            // first reconstituing the `Vec<u8>` and then using the safe methods on `String`,
+            // because, well, we already know we got a valid `String` originally.
+            Kind::Owned => unsafe {
+                String::from_raw_parts(ptr.as_ptr(), metadata.length(), metadata.capacity())
+            },
 
-                    // We're reconstituting the `String` directly from the backing storage, rather than first reconstituing the
-                    // `Vec<u8>` and then using the safe methods on `String`, because, well, we already know we got a valid
-                    // `String` originally.
-                    Kind::Owned => unsafe {
-                        String::from_raw_parts(ptr.as_ptr(), metadata.length(), metadata.capacity())
-                    },
-
-                    // We specifically do _not_ forget the `Arc<str>` here, like we do in `clone_from_parts`.
-                    //
-                    // This method overall is called when `Cow2` is being consumed.  In the case of `Cow2` owning the string,
-                    // letting the `Drop` impl run would try to deallocate that string, which obviously wouldn't fly, so we
-                    // ensure thre `Drop` impl doesn't run... but that doesn't work here, because we're not able to consume
-                    // anything from `Arc<str>`, so we only need a reference to call `to_string` but we can't leave our
-                    // `Arc<str>` dangling... so we have to make sure it drops here.
-                    Kind::Shared => {
-                        let s =
-                            unsafe { Arc::from_raw(Self::borrowed_from_parts(Some(ptr), inner)) };
-                        s.to_string()
-                    }
-                }
+            // We specifically do _not_ forget the `Arc<str>` here, like we do in
+            // `clone_from_parts`.
+            //
+            // This method overall is called when `Cow2` is being consumed.  In the case of
+            // `Cow2` owning the string, letting the `Drop` impl run would try to deallocate
+            // that string, which obviously wouldn't fly, so we ensure thre `Drop` impl
+            // doesn't run... but that doesn't work here, because we're not able to consume
+            // anything from `Arc<str>`, so we only need a reference to call `to_string` but
+            // we can't leave our `Arc<str>` dangling... so we have to make sure it drops
+            // here.
+            Kind::Shared => {
+                let s = unsafe { Arc::from_raw(Self::borrowed_from_parts(ptr, metadata)) };
+                s.to_string()
             }
         }
     }
 
     #[inline]
     fn clone_from_parts(
-        ptr: Option<NonNull<Self::Pointer>>,
-        inner: &Inner,
-    ) -> (Option<NonNull<Self::Pointer>>, Inner) {
-        // When the pointer is `None`, we're inlining the string. Otherwise, it's not inlined.
-        match ptr {
-            // Just copy the entire `Inner` as-is, since we're inlined.
-            None => (None, *inner),
+        ptr: NonNull<Self::Pointer>,
+        metadata: &Metadata,
+    ) -> (NonNull<Self::Pointer>, Metadata) {
+        match metadata.kind() {
+            // As we're operating on a reference, `Cow2` is bound to the lifetime of that
+            // source reference. In turn, we can safely the same pointer/metadata to that
+            // reference for the clone of `Cow2` so long as the lifetimes as identical, as
+            // the clone cannot go out-of-scope any later than the original `Cow2` will.
+            Kind::Borrowed => (ptr, *metadata),
 
-            Some(ptr) => {
-                let metadata = unsafe { inner.non_inlined.0 };
-                match metadata.kind() {
-                    // As we're operating on a reference, `Cow2` is bound to the lifetime of tthat source reference. In turn, we
-                    // can safely the same pointer/metadata to that reference for the clone of `Cow2` so long as the lifetimes
-                    // as identical, as the clone cannot go out-of-scope any later than the original `Cow2` will.
-                    Kind::Borrowed => (Some(ptr), Inner::non_inlined(metadata)),
+            Kind::Owned => {
+                let s = unsafe { &*Self::borrowed_from_parts(ptr, metadata) };
 
-                    // When we have an owned string, we first take a reference to it and check its length. If it can be
-                    // inlined, we do that instead of cloning the string and giving back yet another owned `Cow2`, since
-                    // there's no point allocating something small enough to be inlined.
-                    Kind::Owned => {
-                        let s = unsafe { &*Self::borrowed_from_parts(Some(ptr), inner) };
+                Self::owned_into_parts(s.to_string())
+            }
 
-                        let sbuf = s.as_bytes();
-                        let slen = sbuf.len();
-                        if slen <= MAX_INLINE_DATA_LEN {
-                            let mut data = [0u8; MAX_INLINE_DATA_LEN];
-                            (&mut data[..slen]).copy_from_slice(sbuf);
+            // We have to reconstruct the `Arc` so we can correctly clone it but we _also_
+            // have to make sure that we forget `original` so that we don't drop it early
+            // and invalidate the actual string being pointed to.
+            Kind::Shared => {
+                let original = unsafe { Arc::from_raw(Self::borrowed_from_parts(ptr, metadata)) };
+                let new = Arc::clone(&original);
 
-                            let length = slen as u8;
+                // SAFETY: The backing `Arc<str>` will be dropped via the `Drop` impl for `Cow2`.
+                std::mem::forget(original);
 
-                            (None, Inner::inlined(length, data))
-                        } else {
-                            let (ptr, metadata) = Self::owned_into_parts(s.to_string());
-                            (Some(ptr), Inner::non_inlined(metadata))
-                        }
-                    }
-
-                    // We have to reconstruct the `Arc` so we can correctly clone it but we _also_ have to make sure that we
-                    // forget `original` so that we don't drop it early and invalidate the actual string being pointed to.
-                    Kind::Shared => {
-                        let original =
-                            unsafe { Arc::from_raw(Self::borrowed_from_parts(Some(ptr), inner)) };
-                        let new = Arc::clone(&original);
-
-                        // SAFETY: The backing `Arc<str>` will be dropped via the `Drop` impl for `Cow2`.
-                        std::mem::forget(original);
-
-                        let (ptr, metadata) = Self::shared_into_parts(new);
-                        (Some(ptr), Inner::non_inlined(metadata))
-                    }
-                }
+                Self::shared_into_parts(new)
             }
         }
     }
 
     #[inline]
-    fn drop_from_parts(ptr: Option<NonNull<Self::Pointer>>, inner: &Inner) {
-        // When the pointer is `None`, we're inlining the string. Otherwise, it's not inlined. Since we have nothing to
-        // drop when inlined, focus on the non-inlined case here.
-        if let Some(ptr) = ptr {
-            let metadata = unsafe { inner.non_inlined.0 };
-            match metadata.kind() {
-                // References don't own anything, so there's nothing to drop.
-                Kind::Borrowed => {}
+    fn drop_from_parts(ptr: NonNull<Self::Pointer>, metadata: &Metadata) {
+        match metadata.kind() {
+            // References don't own anything, so there's nothing to drop.
+            Kind::Borrowed => {}
 
-                // We originally took in a `String`, but we decomposed it to its backing `Vec<u8>`, so we can simply
-                // reconstruct the `Vec<u8>` without having to go through the process of also recreating the `String`, which
-                // would involve revalidating the input bytes as valid UTF-8, and so on.
-                Kind::Owned => {
-                    let owned = unsafe {
-                        Vec::from_raw_parts(ptr.as_ptr(), metadata.length(), metadata.capacity())
-                    };
-                    drop(owned);
-                }
+            // We originally took in a `String`, but we decomposed it to its backing `Vec<u8>`, so we can simply
+            // reconstruct the `Vec<u8>` without having to go through the process of also recreating the `String`, which
+            // would involve revalidating the input bytes as valid UTF-8, and so on.
+            Kind::Owned => {
+                let owned = unsafe {
+                    Vec::from_raw_parts(ptr.as_ptr(), metadata.length(), metadata.capacity())
+                };
+                drop(owned);
+            }
 
-                // We just need to reconstitute the `Arc<str>` so it can run its own drop logic.
-                Kind::Shared => {
-                    let arc = unsafe { Arc::from_raw(Self::borrowed_from_parts(Some(ptr), inner)) };
-                    drop(arc);
-                }
+            // We just need to reconstitute the `Arc<str>` so it can run its own drop logic.
+            Kind::Shared => {
+                let arc = unsafe { Arc::from_raw(Self::borrowed_from_parts(ptr, metadata)) };
+                drop(arc);
             }
         }
     }
@@ -727,32 +608,20 @@ where
     }
 
     #[inline]
-    fn borrowed_from_parts(ptr: Option<NonNull<Self::Pointer>>, inner: &Inner) -> *const Self {
-        // SAFETY: Only `str` can ever be inlined, not `[str]`, so we would panic on unwrapping `ptr` before
-        // accessing `inner`, and so we cannot perform an invalid access of `inner`: if `ptr` is `Some(...)`, then
-        // `self.non_inlined` must be initialized and valid.
-        let ptr = ptr.expect("not an inlinable type; `ptr` must be `Some(..)`");
-        let metadata = unsafe { inner.non_inlined.0 };
-
+    fn borrowed_from_parts(ptr: NonNull<Self::Pointer>, metadata: &Metadata) -> *const Self {
         slice_from_raw_parts(ptr.as_ptr(), metadata.length()) as *const _
     }
 
     #[inline]
     fn owned_from_parts(
-        ptr: Option<NonNull<Self::Pointer>>,
-        inner: &Inner,
+        ptr: NonNull<Self::Pointer>,
+        metadata: &Metadata,
     ) -> <Self as ToOwned>::Owned {
-        // SAFETY: Only `str` can ever be inlined, not `[str]`, so we would panic on unwrapping `ptr` before
-        // accessing `inner`, and so we cannot perform an invalid access of `inner`: if `ptr` is `Some(...)`, then
-        // `self.non_inlined` must be initialized and valid.
-        let ptr = ptr.expect("not an inlinable type; `ptr` must be `Some(..)`");
-        let metadata = unsafe { inner.non_inlined.0 };
-
         match metadata.kind() {
-            // If we have a reference, well, then yeah, we need to clone to `Vec<T>`. We own nothing so there's nothing
-            // to drop.
+            // If we have a reference, well, then yeah, we need to clone to `Vec<T>`. We own nothing
+            // so there's nothing to drop.
             Kind::Borrowed => {
-                let s = unsafe { &*Self::borrowed_from_parts(Some(ptr), inner) };
+                let s = unsafe { &*Self::borrowed_from_parts(ptr, metadata) };
                 s.to_vec()
             }
 
@@ -761,15 +630,17 @@ where
                 Vec::from_raw_parts(ptr.as_ptr(), metadata.length(), metadata.capacity())
             },
 
-            // We specifically do _not_ forget the `Arc<[T]>` here, like we do in `clone_from_parts`.
+            // We specifically do _not_ forget the `Arc<[T]>` here, like we do in
+            // `clone_from_parts`.
             //
-            // This method overall is called when `Cow2` is being consumed.  In the case of `Cow2` owning the vector,
-            // letting the `Drop` impl run would try to deallocate that vector, which obviously wouldn't fly, so we
-            // ensure thre `Drop` impl doesn't run... but that doesn't work here, because we're not able to consume
-            // anything from `Arc<[T]>`, so we only need a reference to call `to_vec` but we can't leave our
-            // `Arc<[T]>` dangling... so we have to make sure it drops here.
+            // This method is called when `Cow2` is being consumed.  In the case of `Cow2` owning
+            // the vector, letting the `Drop` impl run would try to deallocate that vector, which
+            // obviously wouldn't fly, so we ensure thre `Drop` impl doesn't run... but that doesn't
+            // work here, because we're not able to consume anything from `Arc<[T]>`, so we only
+            // need a reference to call `to_vec` but we can't leave our `Arc<[T]>` dangling... so
+            // we have to make sure it drops here.
             Kind::Shared => {
-                let s = unsafe { Arc::from_raw(Self::borrowed_from_parts(Some(ptr), inner)) };
+                let s = unsafe { Arc::from_raw(Self::borrowed_from_parts(ptr, metadata)) };
                 s.to_vec()
             }
         }
@@ -777,53 +648,37 @@ where
 
     #[inline]
     fn clone_from_parts(
-        ptr: Option<NonNull<Self::Pointer>>,
-        inner: &Inner,
-    ) -> (Option<NonNull<Self::Pointer>>, Inner) {
-        // SAFETY: Only `str` can ever be inlined, not `[str]`, so we would panic on unwrapping `ptr` before
-        // accessing `inner`, and so we cannot perform an invalid access of `inner`: if `ptr` is `Some(...)`, then
-        // `self.non_inlined` must be initialized and valid.
-        let ptr = ptr.expect("not an inlinable type; `ptr` must be `Some(..)`");
-        let metadata = unsafe { inner.non_inlined.0 };
-
+        ptr: NonNull<Self::Pointer>,
+        metadata: &Metadata,
+    ) -> (NonNull<Self::Pointer>, Metadata) {
         match metadata.kind() {
-            // As we're operating on a reference, `Cow2` is bound to the lifetime of tthat source reference. In turn, we
-            // can safely the same pointer/metadata to that reference for the clone of `Cow2` so long as the lifetimes
-            // as identical, as the clone cannot go out-of-scope any later than the original `Cow2` will.
-            Kind::Borrowed => (Some(ptr), Inner::non_inlined(metadata)),
+            // As we're operating on a reference, `Cow2` is bound to the lifetime of tthat source
+            // reference. In turn, we can safely the same pointer/metadata to that reference for the
+            // clone of `Cow2` so long as the lifetimes as identical, as the clone cannot go
+            // out-of-scope any later than the original `Cow2` will.
+            Kind::Borrowed => (ptr, *metadata),
 
-            // Small deduplication of code by using the same code as we would to get an owned version of a referenced
-            // `Cow2`, given that both a referenced and owned version ultimately point to the same type of thing.
-            Kind::Owned => {
-                let (ptr, metadata) =
-                    Self::owned_into_parts(Self::owned_from_parts(Some(ptr), inner));
-                (Some(ptr), Inner::non_inlined(metadata))
-            }
+            // Small deduplication of code by using the same code as we would to get an owned
+            // version of a referenced `Cow2`, given that both a referenced and owned version
+            // ultimately point to the same type of thing.
+            Kind::Owned => Self::owned_into_parts(Self::owned_from_parts(ptr, metadata)),
 
             // We have to reconstruct the `Arc` so we can correctly clone it but we _also_ have to make sure that we
             // forget `original` so that we don't drop it early and invalidate the actual value being pointed to.
             Kind::Shared => {
-                let original =
-                    unsafe { Arc::from_raw(Self::borrowed_from_parts(Some(ptr), inner)) };
+                let original = unsafe { Arc::from_raw(Self::borrowed_from_parts(ptr, metadata)) };
                 let new = Arc::clone(&original);
 
                 // SAFETY: The backing `Arc<[T]>` will be dropped via the `Drop` impl for `Cow2`.
                 std::mem::forget(original);
 
-                let (ptr, metadata) = Self::shared_into_parts(new);
-                (Some(ptr), Inner::non_inlined(metadata))
+                Self::shared_into_parts(new)
             }
         }
     }
 
     #[inline]
-    fn drop_from_parts(ptr: Option<NonNull<Self::Pointer>>, inner: &Inner) {
-        // SAFETY: Only `str` can ever be inlined, not `[str]`, so we would panic on unwrapping `ptr` before
-        // accessing `inner`, and so we cannot perform an invalid access of `inner`: if `ptr` is `Some(...)`, then
-        // `self.non_inlined` must be initialized and valid.
-        let ptr = ptr.expect("not an inlinable type; `ptr` must be `Some(..)`");
-        let metadata = unsafe { inner.non_inlined.0 };
-
+    fn drop_from_parts(ptr: NonNull<Self::Pointer>, metadata: &Metadata) {
         match metadata.kind() {
             // References don't own anything, so there's nothing to drop.
             Kind::Borrowed => {}
@@ -838,7 +693,7 @@ where
 
             // We just need to reconstitute the `Arc<[T]>` so it can run its own drop logic.
             Kind::Shared => {
-                let arc = unsafe { Arc::from_raw(Self::borrowed_from_parts(Some(ptr), inner)) };
+                let arc = unsafe { Arc::from_raw(Self::borrowed_from_parts(ptr, metadata)) };
                 drop(arc);
             }
         }
