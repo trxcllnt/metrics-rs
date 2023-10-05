@@ -80,7 +80,7 @@ impl Key {
         N: Into<KeyName>,
     {
         let name = name.into();
-        let labels = Cow::owned(Vec::new());
+        let labels = Cow::from_owned(Vec::new());
 
         Self::builder(name, labels)
     }
@@ -92,7 +92,7 @@ impl Key {
         L: IntoLabels,
     {
         let name = name.into();
-        let labels = Cow::owned(labels.into_labels());
+        let labels = Cow::from_owned(labels.into_labels());
 
         Self::builder(name, labels)
     }
@@ -104,7 +104,7 @@ impl Key {
     {
         Self {
             name: name.into(),
-            labels: Cow::<[Label]>::const_slice(labels),
+            labels: Cow::const_slice(labels),
             hashed: AtomicBool::new(false),
             hash: AtomicU64::new(0),
         }
@@ -123,7 +123,7 @@ impl Key {
     pub const fn from_static_parts(name: &'static str, labels: &'static [Label]) -> Self {
         Self {
             name: KeyName::from_const_str(name),
-            labels: Cow::<[Label]>::const_slice(labels),
+            labels: Cow::const_slice(labels),
             hashed: AtomicBool::new(false),
             hash: AtomicU64::new(0),
         }
