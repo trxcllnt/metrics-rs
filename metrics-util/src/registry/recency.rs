@@ -131,7 +131,7 @@ where
     T: CounterFn + Send + Sync + 'static,
 {
     fn from(inner: Generational<T>) -> Self {
-        Counter::from_arc(Arc::new(inner))
+        Counter::owned(inner)
     }
 }
 
@@ -140,7 +140,7 @@ where
     T: GaugeFn + Send + Sync + 'static,
 {
     fn from(inner: Generational<T>) -> Self {
-        Gauge::from_arc(Arc::new(inner))
+        Gauge::owned(inner)
     }
 }
 
@@ -149,7 +149,7 @@ where
     T: HistogramFn + Send + Sync + 'static,
 {
     fn from(inner: Generational<T>) -> Self {
-        Histogram::from_arc(Arc::new(inner))
+        Histogram::owned(inner)
     }
 }
 

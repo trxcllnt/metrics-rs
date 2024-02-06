@@ -251,16 +251,16 @@ mod tests {
             todo!()
         }
 
-        fn register_counter(&self, _: &Key, _: &Metadata<'_>) -> Counter {
-            Counter::from_arc(Arc::clone(&self.counter))
+        fn register_counter(&self, _key: &Key, _metadata: &Metadata<'_>) -> Counter {
+            Counter::owned(Arc::clone(&self.counter))
         }
 
-        fn register_gauge(&self, _: &Key, _: &Metadata<'_>) -> Gauge {
-            Gauge::from_arc(Arc::clone(&self.gauge))
+        fn register_gauge(&self, _key: &Key, _metadata: &Metadata<'_>) -> Gauge {
+            Gauge::owned(Arc::clone(&self.gauge))
         }
 
-        fn register_histogram(&self, _: &Key, _: &Metadata<'_>) -> Histogram {
-            Histogram::from_arc(Arc::clone(&self.histogram))
+        fn register_histogram(&self, _key: &Key, _metadata: &Metadata<'_>) -> Histogram {
+            Histogram::owned(Arc::clone(&self.histogram))
         }
     }
 

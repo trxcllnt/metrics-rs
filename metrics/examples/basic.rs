@@ -5,8 +5,6 @@
 //!
 //! We demonstrate the various permutations of values that can be passed in the macro calls, all of
 //! which are documented in detail for the respective macro.
-use std::sync::Arc;
-
 use metrics::{
     counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram, KeyName,
     Metadata, SharedString,
@@ -77,15 +75,15 @@ impl Recorder for PrintRecorder {
     }
 
     fn register_counter(&self, key: &Key, _metadata: &Metadata<'_>) -> Counter {
-        Counter::from_arc(Arc::new(PrintHandle(key.clone())))
+        Counter::owned(PrintHandle(key.clone()))
     }
 
     fn register_gauge(&self, key: &Key, _metadata: &Metadata<'_>) -> Gauge {
-        Gauge::from_arc(Arc::new(PrintHandle(key.clone())))
+        Gauge::owned(PrintHandle(key.clone()))
     }
 
     fn register_histogram(&self, key: &Key, _metadata: &Metadata<'_>) -> Histogram {
-        Histogram::from_arc(Arc::new(PrintHandle(key.clone())))
+        Histogram::owned(PrintHandle(key.clone()))
     }
 }
 

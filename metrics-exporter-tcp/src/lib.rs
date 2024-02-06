@@ -333,15 +333,15 @@ impl Recorder for TcpRecorder {
     }
 
     fn register_counter(&self, key: &Key, _metadata: &Metadata<'_>) -> Counter {
-        Counter::from_arc(Arc::new(Handle::new(key.clone(), self.state.clone())))
+        Counter::owned(Handle::new(key.clone(), self.state.clone()))
     }
 
     fn register_gauge(&self, key: &Key, _metadata: &Metadata<'_>) -> Gauge {
-        Gauge::from_arc(Arc::new(Handle::new(key.clone(), self.state.clone())))
+        Gauge::owned(Handle::new(key.clone(), self.state.clone()))
     }
 
     fn register_histogram(&self, key: &Key, _metadata: &Metadata<'_>) -> Histogram {
-        Histogram::from_arc(Arc::new(Handle::new(key.clone(), self.state.clone())))
+        Histogram::owned(Handle::new(key.clone(), self.state.clone()))
     }
 }
 

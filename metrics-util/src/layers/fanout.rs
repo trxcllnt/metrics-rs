@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use metrics::{
     Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Metadata, Recorder,
     SharedString, Unit,
@@ -26,12 +24,6 @@ impl CounterFn for FanoutCounter {
         for counter in &self.counters {
             counter.absolute(value);
         }
-    }
-}
-
-impl From<FanoutCounter> for Counter {
-    fn from(counter: FanoutCounter) -> Counter {
-        Counter::from_arc(Arc::new(counter))
     }
 }
 
@@ -65,12 +57,6 @@ impl GaugeFn for FanoutGauge {
     }
 }
 
-impl From<FanoutGauge> for Gauge {
-    fn from(gauge: FanoutGauge) -> Gauge {
-        Gauge::from_arc(Arc::new(gauge))
-    }
-}
-
 struct FanoutHistogram {
     histograms: Vec<Histogram>,
 }
@@ -86,12 +72,6 @@ impl HistogramFn for FanoutHistogram {
         for histogram in &self.histograms {
             histogram.record(value);
         }
-    }
-}
-
-impl From<FanoutHistogram> for Histogram {
-    fn from(histogram: FanoutHistogram) -> Histogram {
-        Histogram::from_arc(Arc::new(histogram))
     }
 }
 
@@ -126,14 +106,14 @@ impl Recorder for Fanout {
             .map(|recorder| recorder.register_counter(key, metadata))
             .collect();
 
-        FanoutCounter::from_counters(counters).into()
+        Counter::owned(FanoutCounter::from_counters(counters))
     }
 
     fn register_gauge(&self, key: &Key, metadata: &Metadata<'_>) -> Gauge {
         let gauges =
             self.recorders.iter().map(|recorder| recorder.register_gauge(key, metadata)).collect();
 
-        FanoutGauge::from_gauges(gauges).into()
+        Gauge::owned(FanoutGauge::from_gauges(gauges))
     }
 
     fn register_histogram(&self, key: &Key, metadata: &Metadata<'_>) -> Histogram {
@@ -143,7 +123,7 @@ impl Recorder for Fanout {
             .map(|recorder| recorder.register_histogram(key, metadata))
             .collect();
 
-        FanoutHistogram::from_histograms(histograms).into()
+        Histogram::owned(FanoutHistogram::from_histograms(histograms))
     }
 }
 
