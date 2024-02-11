@@ -22,7 +22,7 @@
 //! `Recency` uses the generation of a metric, along with a measurement of time when a metric is
 //! observed, to build a complete picture that allows deciding if a given metric has gone "idle" or
 //! not, and thus whether it should actually be deleted.
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{borrow::Borrow, marker::PhantomData, sync::atomic::{AtomicUsize, Ordering}};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use std::{collections::HashMap, ops::DerefMut};
@@ -202,6 +202,23 @@ impl GenerationalAtomicStorage {
     }
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct KeyWithKind<K> {
+    kind: MetricKind,
+    key: K,
+}
+
+pub enum MetricState {
+    /// The metric is still referenced in a way in which it could be updated in the future, but has
+    /// currently not seen an update within the recency window, and should be marked as idle to
+    /// allow it to be skipped / ignored when generating exporter output, etc.
+    Idle,
+
+    /// The metric is no longer referenced in a way in which it could be updated in the future, so
+    /// it can safely be deleted from the registry entirely after any necessary final processing.
+    Dead,
+}
+
 /// Tracks recency of metric updates by their registry generation and time.
 ///
 /// In many cases, a user may have a long-running process where metrics are stored over time using
@@ -210,118 +227,78 @@ impl GenerationalAtomicStorage {
 /// metrics that no longer matter are still present in rendered output, adding bloat.
 ///
 /// When coupled with [`Registry`], [`Recency`] can be used to track when the last update to a
-/// metric has occurred for the purposes of removing idle metrics from the registry.  In addition,
-/// it will remove the value from the registry itself to reduce the aforementioned bloat.
+/// metric has occurred for the purposes of removing idle metrics from the registry. Idle metrics
+/// can be skipped to avoid increasing the output of an exporter in an unbounded fashion.
 ///
 /// [`Recency`] is separate from [`Registry`] specifically to avoid imposing any slowdowns when
 /// tracking recency does not matter, despite their otherwise tight coupling.
-pub struct Recency<K> {
-    mask: MetricKindMask,
-    inner: Mutex<(Clock, HashMap<K, (Generation, Instant)>)>,
+pub struct Recency<K, S> {
     idle_timeout: Option<Duration>,
+    mask: MetricKindMask,
+    clock: Clock,
+    inner: Mutex<HashMap<KeyWithKind<K>, (Generation, Instant)>>,
+
+    // TODO: different methods for different storage types so we can enhance the detection of
+    // whether or not the metric is simply idle or if it's no longer referenced at all
+    _storage: PhantomData<S>,
 }
 
-impl<K> Recency<K>
+impl<K, S> Recency<K, S>
 where
     K: Clone + Eq + Hashable,
 {
     /// Creates a new [`Recency`].
     ///
     /// If `idle_timeout` is `None`, no recency checking will occur.  Otherwise, any metric that has
-    /// not been updated for longer than `idle_timeout` will be subject for deletion the next time
-    /// the metric is checked.
+    /// not been updated for longer than `idle_timeout` will be subject to being marked as idle the
+    /// next time the metric is checked.
     ///
-    /// The provided `clock` is used for tracking time, while `mask` controls which metrics
-    /// are covered by the recency logic.  For example, if `mask` only contains counters and
-    /// histograms, then gauges will not be considered for recency, and thus will never be deleted.
+    /// The provided `clock` is used for tracking time, while `mask` controls which metrics are
+    /// covered by the recency logic.  For example, if `mask` only contains counters and histograms,
+    /// then gauges will not be considered for recency, and thus will never be marked idle.
     ///
     /// Refer to the documentation for [`MetricKindMask`](crate::MetricKindMask) for more
     /// information on defining a metric kind mask.
     pub fn new(clock: Clock, mask: MetricKindMask, idle_timeout: Option<Duration>) -> Self {
-        Recency { mask, inner: Mutex::new((clock, HashMap::new())), idle_timeout }
+        Recency { clock, mask, idle_timeout, inner: Mutex::new(HashMap::new()), _storage: PhantomData }
     }
 
-    /// Checks if the given counter should be stored, based on its known recency.
+    /// Checks if the given metric is idle or not based on the last time it was observed.
+    ///
+    /// If the given metric has not yet been seen, it will be tracked and considered active. If the
+    /// given metric has been seen, but not updated since the last time it was observed, and the
+    /// last update was greater than the idle timeout, the metric is considered idle. Otherwise, it
+    /// is considered active.
+    ///
+    /// Otherwise, the metric is considered active.
     ///
     /// If the given key has been updated recently enough, and should continue to be stored, this
     /// method will return `true` and will update the last update time internally.  If the given key
-    /// has not been updated recently enough, the key will be removed from the given registry if the
-    /// given generation also matches.
-    pub fn should_store_counter<S>(
+    /// has not been updated recently enough, the key will be
+    pub fn is_metric_idle(
         &self,
-        key: &K,
-        gen: Generation,
-        registry: &Registry<K, S>,
-    ) -> bool
-    where
-        S: Storage<K>,
-    {
-        self.should_store(key, gen, registry, MetricKind::Counter, |registry, key| {
-            registry.delete_counter(key)
-        })
-    }
-
-    /// Checks if the given gauge should be stored, based on its known recency.
-    ///
-    /// If the given key has been updated recently enough, and should continue to be stored, this
-    /// method will return `true` and will update the last update time internally.  If the given key
-    /// has not been updated recently enough, the key will be removed from the given registry if the
-    /// given generation also matches.
-    pub fn should_store_gauge<S>(&self, key: &K, gen: Generation, registry: &Registry<K, S>) -> bool
-    where
-        S: Storage<K>,
-    {
-        self.should_store(key, gen, registry, MetricKind::Gauge, |registry, key| {
-            registry.delete_gauge(key)
-        })
-    }
-
-    /// Checks if the given histogram should be stored, based on its known recency.
-    ///
-    /// If the given key has been updated recently enough, and should continue to be stored, this
-    /// method will return `true` and will update the last update time internally.  If the given key
-    /// has not been updated recently enough, the key will be removed from the given registry if the
-    /// given generation also matches.
-    pub fn should_store_histogram<S>(
-        &self,
-        key: &K,
-        gen: Generation,
-        registry: &Registry<K, S>,
-    ) -> bool
-    where
-        S: Storage<K>,
-    {
-        self.should_store(key, gen, registry, MetricKind::Histogram, |registry, key| {
-            registry.delete_histogram(key)
-        })
-    }
-
-    fn should_store<F, S>(
-        &self,
-        key: &K,
-        gen: Generation,
-        registry: &Registry<K, S>,
         kind: MetricKind,
-        delete_op: F,
-    ) -> bool
-    where
-        F: Fn(&Registry<K, S>, &K) -> bool,
-        S: Storage<K>,
-    {
-        if let Some(idle_timeout) = self.idle_timeout {
-            if self.mask.matches(kind) {
+        key: &K,
+        gen: Generation,
+    ) -> bool {
+        match self.idle_timeout {
+            Some(idle_timeout) => if self.mask.matches(kind) {
                 let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-                let (clock, entries) = guard.deref_mut();
+                let entries = guard.deref_mut();
 
-                let now = clock.now();
-                let deleted = if let Some((last_gen, last_update)) = entries.get_mut(key) {
+                let now = self.clock.now();
+
+                // TODO: it'd be much nicer to do some `Borrow<T>` shit here but i haven't figured
+                // out how to make it workable... yet.
+                let full_key = KeyWithKind { kind, key: key.clone() };
+                if let Some((last_gen, last_update)) = entries.get_mut(&full_key) {
                     // If the value is the same as the latest value we have internally, and
                     // we're over the idle timeout period, then remove it and continue.
                     if *last_gen == gen {
                         // If the delete returns false, that means that our generation counter is
                         // out-of-date, and that the metric has been updated since, so we don't
                         // actually want to delete it yet.
-                        (now - *last_update) > idle_timeout && delete_op(registry, key)
+                        (now - *last_update) > idle_timeout
                     } else {
                         // Value has changed, so mark it such.
                         *last_update = now;
@@ -329,17 +306,13 @@ where
                         false
                     }
                 } else {
-                    entries.insert(key.clone(), (gen, now));
+                    entries.insert(full_key, (gen, now));
                     false
-                };
-
-                if deleted {
-                    entries.remove(key);
-                    return false;
                 }
-            }
+            } else {
+                false
+            },
+            None => false,
         }
-
-        true
     }
 }
