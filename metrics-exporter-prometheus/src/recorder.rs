@@ -5,7 +5,10 @@ use std::sync::{PoisonError, RwLock};
 
 use indexmap::IndexMap;
 use metrics::{Counter, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit};
-use metrics_util::registry::{Recency, Registry};
+use metrics_util::{
+    registry::{Recency, Registry},
+    MetricKind,
+};
 use quanta::Instant;
 
 use crate::common::Snapshot;
@@ -30,7 +33,7 @@ impl Inner {
         let counter_handles = self.registry.get_counter_handles();
         for (key, counter) in counter_handles {
             let gen = counter.get_generation();
-            if !self.recency.should_store_counter(&key, gen, &self.registry) {
+            if self.recency.is_metric_idle(MetricKind::Counter, &key, gen) {
                 continue;
             }
 
@@ -45,7 +48,7 @@ impl Inner {
         let gauge_handles = self.registry.get_gauge_handles();
         for (key, gauge) in gauge_handles {
             let gen = gauge.get_generation();
-            if !self.recency.should_store_gauge(&key, gen, &self.registry) {
+            if self.recency.is_metric_idle(MetricKind::Gauge, &key, gen) {
                 continue;
             }
 
@@ -59,7 +62,7 @@ impl Inner {
         let histogram_handles = self.registry.get_histogram_handles();
         for (key, histogram) in histogram_handles {
             let gen = histogram.get_generation();
-            if !self.recency.should_store_histogram(&key, gen, &self.registry) {
+            if self.recency.is_metric_idle(MetricKind::Histogram, &key, gen) {
                 // Since we store aggregated distributions directly, when we're told that a metric
                 // is not recent enough and should be/was deleted from the registry, we also need to
                 // delete it on our side as well.

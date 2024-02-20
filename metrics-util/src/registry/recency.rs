@@ -22,9 +22,12 @@
 //! `Recency` uses the generation of a metric, along with a measurement of time when a metric is
 //! observed, to build a complete picture that allows deciding if a given metric has gone "idle" or
 //! not, and thus whether it should actually be deleted.
-use std::{borrow::Borrow, marker::PhantomData, sync::atomic::{AtomicUsize, Ordering}};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
+use std::{
+    collections::hash_map::Entry,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use std::{collections::HashMap, ops::DerefMut};
 
 use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn};
@@ -33,7 +36,7 @@ use quanta::{Clock, Instant};
 use crate::Hashable;
 use crate::{
     kind::MetricKindMask,
-    registry::{AtomicStorage, Registry, Storage},
+    registry::{AtomicStorage, Storage},
     MetricKind,
 };
 
@@ -208,17 +211,6 @@ struct KeyWithKind<K> {
     key: K,
 }
 
-pub enum MetricState {
-    /// The metric is still referenced in a way in which it could be updated in the future, but has
-    /// currently not seen an update within the recency window, and should be marked as idle to
-    /// allow it to be skipped / ignored when generating exporter output, etc.
-    Idle,
-
-    /// The metric is no longer referenced in a way in which it could be updated in the future, so
-    /// it can safely be deleted from the registry entirely after any necessary final processing.
-    Dead,
-}
-
 /// Tracks recency of metric updates by their registry generation and time.
 ///
 /// In many cases, a user may have a long-running process where metrics are stored over time using
@@ -232,18 +224,14 @@ pub enum MetricState {
 ///
 /// [`Recency`] is separate from [`Registry`] specifically to avoid imposing any slowdowns when
 /// tracking recency does not matter, despite their otherwise tight coupling.
-pub struct Recency<K, S> {
+pub struct Recency<K> {
     idle_timeout: Option<Duration>,
     mask: MetricKindMask,
     clock: Clock,
     inner: Mutex<HashMap<KeyWithKind<K>, (Generation, Instant)>>,
-
-    // TODO: different methods for different storage types so we can enhance the detection of
-    // whether or not the metric is simply idle or if it's no longer referenced at all
-    _storage: PhantomData<S>,
 }
 
-impl<K, S> Recency<K, S>
+impl<K> Recency<K>
 where
     K: Clone + Eq + Hashable,
 {
@@ -260,7 +248,7 @@ where
     /// Refer to the documentation for [`MetricKindMask`](crate::MetricKindMask) for more
     /// information on defining a metric kind mask.
     pub fn new(clock: Clock, mask: MetricKindMask, idle_timeout: Option<Duration>) -> Self {
-        Recency { clock, mask, idle_timeout, inner: Mutex::new(HashMap::new()), _storage: PhantomData }
+        Recency { clock, mask, idle_timeout, inner: Mutex::new(HashMap::new()) }
     }
 
     /// Checks if the given metric is idle or not based on the last time it was observed.
@@ -275,44 +263,194 @@ where
     /// If the given key has been updated recently enough, and should continue to be stored, this
     /// method will return `true` and will update the last update time internally.  If the given key
     /// has not been updated recently enough, the key will be
-    pub fn is_metric_idle(
-        &self,
-        kind: MetricKind,
-        key: &K,
-        gen: Generation,
-    ) -> bool {
+    pub fn is_metric_idle(&self, kind: MetricKind, key: &K, gen: Generation) -> bool {
         match self.idle_timeout {
-            Some(idle_timeout) => if self.mask.matches(kind) {
-                let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-                let entries = guard.deref_mut();
+            Some(idle_timeout) => {
+                if self.mask.matches(kind) {
+                    let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+                    let entries = guard.deref_mut();
 
-                let now = self.clock.now();
+                    let now = self.clock.now();
 
-                // TODO: it'd be much nicer to do some `Borrow<T>` shit here but i haven't figured
-                // out how to make it workable... yet.
-                let full_key = KeyWithKind { kind, key: key.clone() };
-                if let Some((last_gen, last_update)) = entries.get_mut(&full_key) {
-                    // If the value is the same as the latest value we have internally, and
-                    // we're over the idle timeout period, then remove it and continue.
-                    if *last_gen == gen {
-                        // If the delete returns false, that means that our generation counter is
-                        // out-of-date, and that the metric has been updated since, so we don't
-                        // actually want to delete it yet.
-                        (now - *last_update) > idle_timeout
-                    } else {
-                        // Value has changed, so mark it such.
-                        *last_update = now;
-                        *last_gen = gen;
-                        false
+                    // TODO: It'd be much nicer to somehow be able to work with `Borrow<T>` here to
+                    // avoid cloning the key, but I haven't figured out how to do that since in order to
+                    // implement `Borrow<T>` for `KeyWithKind`, we'd have to be able to return `&T`, and
+                    // we have no way to actually do that, because we don't in fact hold the inner state
+                    // like that.
+                    let full_key = KeyWithKind { kind, key: key.clone() };
+                    match entries.entry(full_key) {
+                        Entry::Occupied(mut entry) => {
+                            let should_delete = {
+                                let (last_gen, last_update) = entry.get_mut();
+
+                                // If the value is the same as the latest value we have internally, and
+                                // we're over the idle timeout period, then it should be removed.
+                                if *last_gen == gen {
+                                    (now - *last_update) > idle_timeout
+                                } else {
+                                    // Value has changed, so mark it such.
+                                    *last_update = now;
+                                    *last_gen = gen;
+                                    false
+                                }
+                            };
+
+                            if should_delete {
+                                let _ = entry.remove();
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Entry::Vacant(entry) => {
+                            // We haven't seen this metric yet, so start tracking it.
+                            entry.insert((gen, now));
+                            false
+                        }
                     }
                 } else {
-                    entries.insert(full_key, (gen, now));
                     false
                 }
-            } else {
-                false
-            },
+            }
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use metrics::Key;
+    use quanta::Clock;
+
+    use crate::{MetricKind, MetricKindMask};
+
+    use super::{Generational, Recency};
+
+    // Not relevant that the value is big or small for tests, since time is mocked anyways.
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
+
+    #[test]
+    fn basic() {
+        let (clock, mock) = Clock::mock();
+        let recency = Recency::new(clock, MetricKindMask::ALL, Some(IDLE_TIMEOUT));
+
+        // Need to advance by _just_ over the idle timeout for the logic to fire.
+        let idle_timeout_advance = IDLE_TIMEOUT + Duration::from_nanos(1);
+
+        // Create a fake counter and gauge, and run them through to initialize them in the state.
+        let generational_one = Generational::new(());
+        let generational_two = Generational::new(());
+        let key_one = Key::from_name("pretend_counter");
+        let key_two = Key::from_name("pretend_gauge");
+
+        let is_idle_initial_one = recency.is_metric_idle(
+            MetricKind::Counter,
+            &key_one,
+            generational_one.get_generation(),
+        );
+        assert!(
+            !is_idle_initial_one,
+            "metric that has not been seen yet should not be marked as idle"
+        );
+
+        let is_idle_initial_two =
+            recency.is_metric_idle(MetricKind::Gauge, &key_two, generational_two.get_generation());
+        assert!(
+            !is_idle_initial_two,
+            "metric that has not been seen yet should not be marked as idle"
+        );
+
+        // Update only the gauge, but not the counter, and advance time by the idle timeout amount.
+        // The counter should now be marked as idle since it has not been updated since the last
+        // time it was observed and the idle timeout period has elapsed.
+        generational_two.with_increment(|_| ());
+
+        mock.increment(idle_timeout_advance);
+
+        let is_idle_one = recency.is_metric_idle(
+            MetricKind::Counter,
+            &key_one,
+            generational_one.get_generation(),
+        );
+        assert!(
+            is_idle_one,
+            "metric that has not been updated since before the idle timeout should be marked idle"
+        );
+
+        let is_idle_two =
+            recency.is_metric_idle(MetricKind::Gauge, &key_two, generational_two.get_generation());
+        assert!(
+            !is_idle_two,
+            "metric that has been updated prior to the idle timeout should not be marked idle"
+        );
+
+        // Now ensure that once we go another idle timeout period's worth of time without an update
+        // that the gauge is also marked as idle.
+        mock.increment(idle_timeout_advance);
+
+        let is_idle_two =
+            recency.is_metric_idle(MetricKind::Gauge, &key_two, generational_two.get_generation());
+        assert!(
+            is_idle_two,
+            "metric that has not been updated since before the idle timeout should be marked idle"
+        );
+    }
+
+    #[test]
+    fn specific_mask() {
+        let (clock, mock) = Clock::mock();
+        let recency = Recency::new(clock, MetricKindMask::COUNTER, Some(IDLE_TIMEOUT));
+
+        // Need to advance by _just_ over the idle timeout for the logic to fire.
+        let idle_timeout_advance = IDLE_TIMEOUT + Duration::from_nanos(1);
+
+        // Create a fake counter and gauge, and run them through to initialize them in the state.
+        let generational_one = Generational::new(());
+        let generational_two = Generational::new(());
+        let key_one = Key::from_name("pretend_counter");
+        let key_two = Key::from_name("pretend_gauge");
+
+        let is_idle_initial_one = recency.is_metric_idle(
+            MetricKind::Counter,
+            &key_one,
+            generational_one.get_generation(),
+        );
+        assert!(
+            !is_idle_initial_one,
+            "metric that has not been seen yet should not be marked as idle"
+        );
+
+        let is_idle_initial_two =
+            recency.is_metric_idle(MetricKind::Gauge, &key_two, generational_two.get_generation());
+        assert!(
+            !is_idle_initial_two,
+            "metric with type that is not covered by the mask should never be marked idle"
+        );
+
+        // Advance time by the idle timeout amount.
+        //
+        // Since we haven't updated either metric, both would normally qualify for being marked as
+        // idle, but we should only mark the counter as idle given that the gauge is not part of the
+        // metric kind mask.
+        mock.increment(idle_timeout_advance);
+
+        let is_idle_one = recency.is_metric_idle(
+            MetricKind::Counter,
+            &key_one,
+            generational_one.get_generation(),
+        );
+        assert!(
+            is_idle_one,
+            "metric that has not been updated since before the idle timeout should be marked idle"
+        );
+
+        let is_idle_two =
+            recency.is_metric_idle(MetricKind::Gauge, &key_two, generational_two.get_generation());
+        assert!(
+            !is_idle_two,
+            "metric with type that is not covered by the mask should never be marked idle"
+        );
     }
 }
