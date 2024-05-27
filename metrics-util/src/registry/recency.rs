@@ -215,6 +215,10 @@ impl GenerationalAtomicStorage {
 ///
 /// [`Recency`] is separate from [`Registry`] specifically to avoid imposing any slowdowns when
 /// tracking recency does not matter, despite their otherwise tight coupling.
+#[deprecated(
+    since = "0.17.0",
+    note = "Prefer using `AtomicHandle` to determine if a metric able to be dropped or not.",
+)]
 pub struct Recency<K> {
     mask: MetricKindMask,
     inner: Mutex<(Clock, HashMap<K, (Generation, Instant)>)>,

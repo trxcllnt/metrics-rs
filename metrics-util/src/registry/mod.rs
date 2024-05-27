@@ -20,6 +20,9 @@ pub use recency::{
     Generation, Generational, GenerationalAtomicStorage, GenerationalStorage, Recency,
 };
 
+mod handle;
+pub use self::handle::AtomicHandle;
+
 use crate::Hashable;
 
 type RegistryHasher = KeyHasher;
@@ -466,6 +469,37 @@ where
             histograms.insert(k.clone(), v.clone());
         });
         histograms
+    }
+}
+
+impl<K, S> Registry<K, S>
+where
+    K: Clone + Eq + Hashable,
+    S: Storage<K>,
+    S::Counter: AtomicHandle,
+    S::Gauge: AtomicHandle,
+    S::Histogram: AtomicHandle,
+{
+    /// Attempts to consume the inner value of a counter handle, returning it if successful.
+    pub fn try_consume_counter(&mut self, key: &K) -> Option<<S::Counter as AtomicHandle>::Inner> {
+        let (hash, shard) = self.get_hash_and_shard_for_counter(key);
+        let mut shard_write = shard.write().unwrap_or_else(PoisonError::into_inner);
+        let entry = shard_write.raw_entry_mut().from_key_hashed_nocheck(hash, key);
+        match entry {
+            RawEntryMut::Occupied(entry) => {
+                let (key, counter) = entry.remove_entry();
+                match counter.try_consume() {
+                    Ok(inner) => Some(inner),
+                    Err(counter) => {
+                        // Put the counter back if we failed to consume it.
+                        let entry = shard_write.raw_entry_mut().from_key_hashed_nocheck(hash, &key);
+                        entry.insert(key, counter);
+                        None
+                    }
+                }
+            },
+            RawEntryMut::Vacant(_) => None,
+        }
     }
 }
 
