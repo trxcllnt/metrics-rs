@@ -1,4 +1,4 @@
-use std::{cell::Cell, ops::Deref, ptr::NonNull, rc::Rc, sync::Arc};
+use std::{cell::Cell, ptr::NonNull, rc::Rc, sync::Arc};
 
 mod cell;
 use self::cell::RecorderOnceCell;
@@ -64,27 +64,27 @@ where
     T: Recorder,
 {
     fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_counter(key, unit, description)
+        (**self).describe_counter(key, unit, description)
     }
 
     fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_gauge(key, unit, description)
+        (**self).describe_gauge(key, unit, description)
     }
 
     fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_histogram(key, unit, description)
+        (**self).describe_histogram(key, unit, description)
     }
 
     fn register_counter(&self, key: &Key, metadata: &Metadata<'_>) -> Counter {
-        Deref::deref(self).register_counter(key, metadata)
+        (**self).register_counter(key, metadata)
     }
 
     fn register_gauge(&self, key: &Key, metadata: &Metadata<'_>) -> Gauge {
-        Deref::deref(self).register_gauge(key, metadata)
+        (**self).register_gauge(key, metadata)
     }
 
     fn register_histogram(&self, key: &Key, metadata: &Metadata<'_>) -> Histogram {
-        Deref::deref(self).register_histogram(key, metadata)
+        (**self).register_histogram(key, metadata)
     }
 }
 
@@ -93,27 +93,27 @@ where
     T: Recorder,
 {
     fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_counter(key, unit, description)
+        (**self).describe_counter(key, unit, description)
     }
 
     fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_gauge(key, unit, description)
+        (**self).describe_gauge(key, unit, description)
     }
 
     fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_histogram(key, unit, description)
+        (**self).describe_histogram(key, unit, description)
     }
 
     fn register_counter(&self, key: &Key, metadata: &Metadata<'_>) -> Counter {
-        Deref::deref(self).register_counter(key, metadata)
+        (**self).register_counter(key, metadata)
     }
 
     fn register_gauge(&self, key: &Key, metadata: &Metadata<'_>) -> Gauge {
-        Deref::deref(self).register_gauge(key, metadata)
+        (**self).register_gauge(key, metadata)
     }
 
     fn register_histogram(&self, key: &Key, metadata: &Metadata<'_>) -> Histogram {
-        Deref::deref(self).register_histogram(key, metadata)
+        (**self).register_histogram(key, metadata)
     }
 }
 
@@ -122,27 +122,27 @@ where
     T: Recorder,
 {
     fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_counter(key, unit, description)
+        (**self).describe_counter(key, unit, description)
     }
 
     fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_gauge(key, unit, description)
+        (**self).describe_gauge(key, unit, description)
     }
 
     fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: SharedString) {
-        Deref::deref(self).describe_histogram(key, unit, description)
+        (**self).describe_histogram(key, unit, description)
     }
 
     fn register_counter(&self, key: &Key, metadata: &Metadata<'_>) -> Counter {
-        Deref::deref(self).register_counter(key, metadata)
+        (**self).register_counter(key, metadata)
     }
 
     fn register_gauge(&self, key: &Key, metadata: &Metadata<'_>) -> Gauge {
-        Deref::deref(self).register_gauge(key, metadata)
+        (**self).register_gauge(key, metadata)
     }
 
     fn register_histogram(&self, key: &Key, metadata: &Metadata<'_>) -> Histogram {
-        Deref::deref(self).register_histogram(key, metadata)
+        (**self).register_histogram(key, metadata)
     }
 }
 
