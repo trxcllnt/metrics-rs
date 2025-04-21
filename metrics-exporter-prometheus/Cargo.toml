@@ -16,7 +16,7 @@ categories = ["development-tools::debugging"]
 keywords = ["metrics", "telemetry", "prometheus"]
 
 [features]
-default = ["http-listener", "push-gateway"]
+default = ["http-listener", "push-gateway", "hyper-rustls/aws-lc-rs"]
 async-runtime = ["tokio", "hyper-util/tokio"]
 http-listener = ["async-runtime", "ipnet", "tracing", "_hyper-server"]
 uds-listener = ["http-listener"]
@@ -37,7 +37,13 @@ http-body-util = { workspace = true, optional = true }
 
 # Optional
 hyper = { workspace = true, optional = true }
-hyper-rustls = { workspace = true, optional = true }
+hyper-rustls = { workspace = true, default-features = false, features = [
+    # Default features except rustls provider
+    "native-tokio",
+    "http1",
+    "tls12",
+    "logging",
+], optional = true }
 hyper-util = { workspace = true, optional = true }
 indexmap = { workspace = true }
 ipnet = { workspace = true, optional = true }
